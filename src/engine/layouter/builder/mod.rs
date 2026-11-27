@@ -139,6 +139,7 @@ pub(crate) fn element_info(html_node: &HtmlNodeType) -> Option<ElementInfo> {
         hovered: false,
         active: false,
         shadow_root_id: None,
+        slotted_root: None,
     })
 }
 
@@ -213,7 +214,9 @@ pub(crate) fn element_sibling_infos(
             info.lang = own_lang(snapshot, child).or_else(|| parent_lang.map(Arc::<str>::from));
             info.hovered = interaction.hovered_path.contains(&child);
             info.active = interaction.active_path.contains(&child);
-            info.shadow_root_id = enclosing_shadow_root_id(snapshot, child);
+            let shadow = shadow_context(snapshot, child);
+            info.shadow_root_id = shadow.shadow_root_id;
+            info.slotted_root = shadow.slotted_root;
 
             let mut sibling = info.clone();
             sibling.previous_siblings = ElementChain::default();
@@ -240,36 +243,65 @@ pub struct InheritedCss {
     pub color_scheme: ColorScheme,
 }
 
-/// Find the shadow root ID that encloses the given snapshot node, if any.
-/// Walks up the parent chain looking for a `ShadowRoot` node and returns its
-/// stable DOM ID (assigned when the node was first exposed to JS). Returns
-/// `None` when the node is not inside any shadow tree.
-pub(crate) fn enclosing_shadow_root_id(snapshot: &DomSnapshot, mut child: NodeId) -> Option<u64> {
-    loop {
-        let node = &snapshot.node(child);
-        if let HtmlNodeType::ShadowRoot { .. } = &node.kind {
-            return Some(node.dom_id);
+/// The Shadow DOM position of a snapshot node: the shadow tree it lives in and
+/// the tree that projects it, if it is slotted content.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct ShadowContext {
+    /// The enclosing shadow tree, when the node is inside one.
+    pub shadow_root_id: Option<u64>,
+    /// The shadow tree whose slot projects this node, when it is light-DOM
+    /// content assigned to a slot (`::slotted()` can match it).
+    pub slotted_root: Option<u64>,
+}
+
+/// Resolves both Shadow DOM facts about `node` by walking up its parents.
+pub(crate) fn shadow_context(snapshot: &DomSnapshot, node: NodeId) -> ShadowContext {
+    // The nearest shadow root at or above the node decides its tree.
+    let mut ancestor = Some(node);
+    while let Some(id) = ancestor {
+        if let Some(shadow_root_id) = shadow_tree_id(snapshot, id) {
+            return ShadowContext {
+                shadow_root_id: Some(shadow_root_id),
+                slotted_root: None,
+            };
         }
-        // Walk up to the parent. The snapshot stores children as Vec<NodeId>,
-        // but we need parent links. Rebuild by scanning from the root.
-        let parent = find_parent(snapshot, snapshot.roots()[0], child);
-        let Some(parent) = parent else {
-            return None;
-        };
-        child = parent;
+        ancestor = snapshot.parent(id);
+    }
+    // Otherwise the node may be light-DOM content projected by its parent host.
+    ShadowContext {
+        shadow_root_id: None,
+        slotted_root: snapshot
+            .parent(node)
+            .and_then(|host| projecting_shadow_root(snapshot, host, node)),
     }
 }
 
-/// Find the parent node ID of `target` by scanning from `root`.
-fn find_parent(snapshot: &DomSnapshot, root: NodeId, target: NodeId) -> Option<NodeId> {
-    let mut stack = vec![root];
+fn shadow_tree_id(snapshot: &DomSnapshot, node: NodeId) -> Option<u64> {
+    match snapshot.node(node).kind {
+        HtmlNodeType::ShadowRoot { id, .. } => Some(id),
+        _ => None,
+    }
+}
+
+/// The shadow tree of `host` when it projects `node` through a `<slot>`.
+fn projecting_shadow_root(snapshot: &DomSnapshot, host: NodeId, node: NodeId) -> Option<u64> {
+    let shadow_root = snapshot
+        .children(host)
+        .iter()
+        .copied()
+        .find(|&child| shadow_tree_id(snapshot, child).is_some())?;
+    let slot_name = snapshot.node(node).kind.get_attr("slot").unwrap_or("");
+    let mut stack: Vec<NodeId> = snapshot.children(shadow_root).to_vec();
     while let Some(current) = stack.pop() {
-        for &child in snapshot.children(current) {
-            if child == target {
-                return Some(current);
-            }
-            stack.push(child);
+        let kind = &snapshot.node(current).kind;
+        if kind
+            .tag_name()
+            .is_some_and(|tag| tag.eq_ignore_ascii_case("slot"))
+            && kind.get_attr("name").unwrap_or("") == slot_name
+        {
+            return shadow_tree_id(snapshot, shadow_root);
         }
+        stack.extend_from_slice(snapshot.children(current));
     }
     None
 }
@@ -2924,11 +2956,12 @@ fn collect_candidates(
         // Declarations sharing an identical selector are grouped, so the
         // (comparatively expensive) selector walk happens once per group.
         perf_scope!(sel_match);
+        let origin = group.origin_shadow_root;
         let matches_sel = match match_cache.as_deref_mut() {
-            Some(cache) => {
-                cache.get_or_insert(&group.selector, node_id, || group.selector.matches(chain))
-            }
-            None => group.selector.matches(chain),
+            Some(cache) => cache.get_or_insert(&group.selector, node_id, origin, || {
+                group.selector.matches_in_scope(chain, origin)
+            }),
+            None => group.selector.matches_in_scope(chain, origin),
         };
         #[cfg(any(feature = "profile", debug_assertions))]
         {

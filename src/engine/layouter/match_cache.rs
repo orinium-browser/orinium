@@ -45,8 +45,11 @@ use crate::engine::css::parser::ComplexSelector;
 // the cache at a few megabytes even for very large documents.
 pub const DEFAULT_CAPACITY: usize = 131_072;
 
-/// `(selector allocation, element)` identity of one cached match result.
-type MatchKey = (usize, NodeId);
+/// `(selector allocation, element, stylesheet scope)` identity of one cached
+/// match result. The scope is part of the key because one selector can be
+/// declared both by the document and by a shadow tree's stylesheet, and those
+/// rules match different elements.
+type MatchKey = (usize, NodeId, Option<u64>);
 
 /// Memoizes selector match results for one DOM/rule-set epoch.
 // Uses an epoch-scoped `HashMap` with an admission cap rather than an LRU.
@@ -95,9 +98,10 @@ impl SelectorMatchCache {
         &mut self,
         selector: &Arc<ComplexSelector>,
         node_id: NodeId,
+        origin_shadow_root: Option<u64>,
         compute: impl FnOnce() -> bool,
     ) -> bool {
-        let key = (Arc::as_ptr(selector) as usize, node_id);
+        let key = (Arc::as_ptr(selector) as usize, node_id, origin_shadow_root);
         if let Some(&(matched, entry_epoch)) = self.entries.get(&key)
             && entry_epoch == self.epoch
         {
@@ -158,11 +162,11 @@ mod tests {
         let selector = selector();
         let mut computed = 0;
 
-        let first = cache.get_or_insert(&selector, 7, || {
+        let first = cache.get_or_insert(&selector, 7, None, || {
             computed += 1;
             true
         });
-        let second = cache.get_or_insert(&selector, 7, || {
+        let second = cache.get_or_insert(&selector, 7, None, || {
             computed += 1;
             false
         });
@@ -184,15 +188,15 @@ mod tests {
         let second_selector = selector();
         let mut computed = 0;
 
-        cache.get_or_insert(&first_selector, 1, || {
+        cache.get_or_insert(&first_selector, 1, None, || {
             computed += 1;
             true
         });
-        cache.get_or_insert(&first_selector, 2, || {
+        cache.get_or_insert(&first_selector, 2, None, || {
             computed += 1;
             false
         });
-        cache.get_or_insert(&second_selector, 1, || {
+        cache.get_or_insert(&second_selector, 1, None, || {
             computed += 1;
             false
         });
@@ -211,8 +215,8 @@ mod tests {
         let first_selector = selector();
         let second_selector = selector();
 
-        cache.get_or_insert(&first_selector, 1, || true);
-        cache.get_or_insert(&second_selector, 1, || true);
+        cache.get_or_insert(&first_selector, 1, None, || true);
+        cache.get_or_insert(&second_selector, 1, None, || true);
 
         assert_eq!(cache.len(), 1);
         let stats = cache.stats();
@@ -222,7 +226,7 @@ mod tests {
 
         // Existing entries remain cached.
         let mut computed = 0;
-        let matched = cache.get_or_insert(&first_selector, 1, || {
+        let matched = cache.get_or_insert(&first_selector, 1, None, || {
             computed += 1;
             false
         });
@@ -241,7 +245,7 @@ mod tests {
 
         // First pass fills the cache and skips beyond capacity.
         for sel in &selectors {
-            cache.get_or_insert(sel, 1, || {
+            cache.get_or_insert(sel, 1, None, || {
                 computed += 1;
                 true
             });
@@ -256,7 +260,7 @@ mod tests {
         // Second pass over the same keys: entries inserted in pass 1 must hit.
         // Keys beyond capacity were never stored, so they miss again.
         for sel in &selectors {
-            cache.get_or_insert(sel, 1, || {
+            cache.get_or_insert(sel, 1, None, || {
                 computed += 1;
                 false
             });
@@ -272,7 +276,7 @@ mod tests {
     fn clear_drops_entries_and_resets_counters() {
         let mut cache = SelectorMatchCache::new();
         let selector = selector();
-        cache.get_or_insert(&selector, 1, || true);
+        cache.get_or_insert(&selector, 1, None, || true);
         cache.clear();
 
         assert!(cache.is_empty());
@@ -289,14 +293,14 @@ mod tests {
         let selector = selector();
 
         // First epoch: cache stores `true`.
-        let first = cache.get_or_insert(&selector, 1, || true);
+        let first = cache.get_or_insert(&selector, 1, None, || true);
         assert!(first);
 
         // Bump the epoch without clearing the map (simulates a missed clear).
         cache.epoch = cache.epoch.wrapping_add(1);
 
         // The old entry is still in the map but must be treated as a miss.
-        let second = cache.get_or_insert(&selector, 1, || false);
+        let second = cache.get_or_insert(&selector, 1, None, || false);
         assert!(!second, "stale epoch entry must not be reused");
 
         // Stats should show two misses (both lookups were misses due to epoch mismatch).
@@ -313,7 +317,7 @@ mod tests {
         // Bump epoch many times to test wraparound behavior.
         for _ in 0..10_000 {
             cache.epoch = cache.epoch.wrapping_add(1);
-            cache.get_or_insert(&selector, 1, || true);
+            cache.get_or_insert(&selector, 1, None, || true);
             cache.clear();
         }
 

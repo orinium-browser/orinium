@@ -5,8 +5,8 @@
 use std::collections::HashMap;
 
 use super::builder::{
-    element_info, element_sibling_infos, enclosing_shadow_root_id, is_element_node,
-    is_empty_element, own_lang,
+    element_info, element_sibling_infos, is_element_node, is_empty_element, own_lang,
+    shadow_context,
 };
 use super::css_resolver::{ResolvedDeclaration, RuleSet, StyleOrigin, resolve_inline_style};
 use super::dom_snapshot::{DomSnapshot, NodeId};
@@ -129,7 +129,10 @@ pub fn collect_matched_rules(
 
     let mut rule_index: HashMap<(String, StyleOrigin), usize> = HashMap::new();
     for group in rule_set.query_candidates(element) {
-        if !group.selector.matches(&chain) {
+        if !group
+            .selector
+            .matches_in_scope(&chain, group.origin_shadow_root)
+        {
             continue;
         }
         for &decl_idx in &group.decls {
@@ -212,7 +215,9 @@ fn chain_for_node(snapshot: &DomSnapshot, target: NodeId) -> Option<ElementChain
                 info.lang.clone_from(&langs[0]);
                 // Shadow DOM encapsulation: mark the target as inside a shadow
                 // tree so external selectors are blocked at the boundary.
-                info.shadow_root_id = enclosing_shadow_root_id(snapshot, node_id);
+                let shadow = shadow_context(snapshot, node_id);
+                info.shadow_root_id = shadow.shadow_root_id;
+                info.slotted_root = shadow.slotted_root;
             }
             info
         } else {

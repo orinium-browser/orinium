@@ -81,6 +81,10 @@ pub struct ResolvedDeclaration {
     pub order: usize,
     pub important: bool,
     pub origin: StyleOrigin,
+    /// The shadow tree that owns the stylesheet this declaration came from.
+    /// `None` for document-level sheets. The cascade only applies a scoped
+    /// declaration inside that tree (plus what its slots project).
+    pub origin_shadow_root: Option<u64>,
     /// Nested `@media`/`@supports` conditions which must all match before this
     /// declaration applies. Shared across declarations of the same rule block.
     pub media_queries: Arc<Vec<AtQuery>>,
@@ -99,6 +103,14 @@ pub struct StylesheetResolution {
 }
 
 impl StylesheetResolution {
+    /// Marks every declaration as owned by a `<style>` inside `shadow_root_id`,
+    /// so the cascade applies it only within that shadow tree.
+    pub fn set_shadow_root(&mut self, shadow_root_id: u64) {
+        for declaration in &mut self.declarations {
+            declaration.origin_shadow_root = Some(shadow_root_id);
+        }
+    }
+
     pub fn append(&mut self, mut other: StylesheetResolution) {
         append_resolved_styles(
             &mut self.declarations,
@@ -137,6 +149,11 @@ pub struct RuleSet {
     tag_rules: HashMap<String, Vec<usize>>,
     attribute_rules: HashMap<String, Vec<usize>>,
     universal_rules: Vec<usize>,
+    /// Selectors whose subject carries `::part()`. They cannot be indexed by
+    /// the subject's tag/id/class because the styled element lives inside the
+    /// subject's shadow tree, so they are offered to every element that
+    /// exports a `part` token.
+    part_rules: Vec<usize>,
 }
 
 /// Declarations whose selectors are structurally identical. Matching
@@ -146,6 +163,8 @@ pub struct RuleSet {
 pub struct SelectorGroup {
     pub selector: Arc<ComplexSelector>,
     pub decls: Vec<usize>,
+    /// Shadow tree that owns the rule's stylesheet, if it is scoped to one.
+    pub origin_shadow_root: Option<u64>,
 }
 
 impl RuleSet {
@@ -158,21 +177,26 @@ impl RuleSet {
         // declarations of one rule block share an identical selector, so each
         // unique selector is matched once per element for all its declarations.
         let mut groups = Vec::<SelectorGroup>::new();
-        let mut group_by_selector: HashMap<Arc<ComplexSelector>, usize> = HashMap::new();
+        // Scoped and unscoped rules can share a selector, so the owning shadow
+        // tree is part of the group key.
+        let mut group_by_selector: HashMap<(Arc<ComplexSelector>, Option<u64>), usize> =
+            HashMap::new();
         for (idx, decl) in declarations.iter().enumerate() {
             // Media query evaluation done ONCE per declaration during RuleSet construction!
             if !decl.matches_media(media_env) {
                 continue;
             }
-            match group_by_selector.get(&decl.selector) {
+            let key = (Arc::clone(&decl.selector), decl.origin_shadow_root);
+            match group_by_selector.get(&key) {
                 Some(&group_idx) => groups[group_idx].decls.push(idx),
                 None => {
                     let group_idx = groups.len();
                     groups.push(SelectorGroup {
                         selector: Arc::clone(&decl.selector),
                         decls: vec![idx],
+                        origin_shadow_root: decl.origin_shadow_root,
                     });
-                    group_by_selector.insert(Arc::clone(&decl.selector), group_idx);
+                    group_by_selector.insert(key, group_idx);
                 }
             }
         }
@@ -182,29 +206,35 @@ impl RuleSet {
         let mut tag_rules: HashMap<String, Vec<usize>> = HashMap::new();
         let mut attribute_rules: HashMap<String, Vec<usize>> = HashMap::new();
         let mut universal_rules = Vec::new();
+        let mut part_rules = Vec::new();
 
         for (group_idx, group) in groups.iter().enumerate() {
             // ComplexSelector parts are stored right-to-left: parts[0] is the subject selector.
-            if let Some(subject_part) = group.selector.parts.first() {
-                let sel = &subject_part.selector;
-                if let Some(id) = &sel.id {
-                    id_rules.entry(id.clone()).or_default().push(group_idx);
-                } else if let Some(first_class) = sel.classes.first() {
-                    // Index by the first class to prevent duplicate indexing
-                    class_rules
-                        .entry(first_class.clone())
-                        .or_default()
-                        .push(group_idx);
-                } else if let Some(tag) = &sel.tag {
-                    tag_rules.entry(tag.clone()).or_default().push(group_idx);
-                } else if let Some(first_attr) = sel.attributes.first() {
-                    attribute_rules
-                        .entry(first_attr.name.clone())
-                        .or_default()
-                        .push(group_idx);
-                } else {
-                    universal_rules.push(group_idx);
-                }
+            let Some(subject_part) = group.selector.parts.first() else {
+                universal_rules.push(group_idx);
+                continue;
+            };
+            let sel = &subject_part.selector;
+            // A `::part()` subject styles the part element inside the host's
+            // shadow tree, so the subject's own tag/id/class does not say which
+            // elements can match it.
+            if group.selector.subject_part_name().is_some() {
+                part_rules.push(group_idx);
+            } else if let Some(id) = &sel.id {
+                id_rules.entry(id.clone()).or_default().push(group_idx);
+            } else if let Some(first_class) = sel.classes.first() {
+                // Index by the first class to prevent duplicate indexing
+                class_rules
+                    .entry(first_class.clone())
+                    .or_default()
+                    .push(group_idx);
+            } else if let Some(tag) = &sel.tag {
+                tag_rules.entry(tag.clone()).or_default().push(group_idx);
+            } else if let Some(first_attr) = sel.attributes.first() {
+                attribute_rules
+                    .entry(first_attr.name.clone())
+                    .or_default()
+                    .push(group_idx);
             } else {
                 universal_rules.push(group_idx);
             }
@@ -218,6 +248,7 @@ impl RuleSet {
             tag_rules,
             attribute_rules,
             universal_rules,
+            part_rules,
         }
     }
 
@@ -254,11 +285,22 @@ impl RuleSet {
             .filter_map(|(name, _)| self.attribute_rules.get(name.as_ref()))
             .flat_map(|indices| indices.iter().map(|&g| &self.groups[g]));
 
+        // An element only needs the `::part()` candidates when it exports a
+        // part; every other element skips them entirely.
+        let parts = element
+            .attributes
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("part"))
+            .then(|| self.part_rules.iter().map(|&g| &self.groups[g]))
+            .into_iter()
+            .flatten();
+
         universal
             .chain(id)
             .chain(tag)
             .chain(classes)
             .chain(attributes)
+            .chain(parts)
     }
 
     pub fn declarations(&self) -> &[ResolvedDeclaration] {
@@ -432,6 +474,7 @@ pub(super) fn set_inline_custom_property(
             order: usize::MAX,
             important,
             origin: StyleOrigin::Author,
+            origin_shadow_root: None,
             media_queries: Arc::new(Vec::new()),
         },
     );
@@ -706,6 +749,7 @@ impl CssResolver {
                 order: *order,
                 important: decl.important,
                 origin,
+                origin_shadow_root: None,
                 media_queries: Arc::clone(&media_queries),
             });
             *order += 1;

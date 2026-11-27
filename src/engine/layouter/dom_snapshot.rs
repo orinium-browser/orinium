@@ -22,6 +22,10 @@ pub type NodeId = u32;
 pub struct SnapNode {
     pub kind: HtmlNodeType,
     pub children: Vec<NodeId>,
+    /// Parent node id, or `None` for a snapshot root. Ancestor lookups (for
+    /// example the shadow-tree a node belongs to) are a short walk up this
+    /// link instead of a scan of the whole tree.
+    pub parent: Option<NodeId>,
     /// Stable id the JS runtime attaches to a node when it is first exposed to
     /// scripts. Zero means the node has never been exposed. Layout only builds
     /// snapshots from the real tree and leaves this zero.
@@ -57,7 +61,7 @@ impl DomSnapshot {
     ) -> (Self, Vec<Weak<RefCell<TreeNode<HtmlNodeType>>>>) {
         let mut snapshot = DomSnapshot::default();
         let mut dom_refs: Vec<Weak<RefCell<TreeNode<HtmlNodeType>>>> = Vec::new();
-        let id = snapshot.walk(root, &mut dom_refs);
+        let id = snapshot.walk(root, None, &mut dom_refs);
         snapshot.roots.push(id);
         (snapshot, dom_refs)
     }
@@ -72,6 +76,7 @@ impl DomSnapshot {
         fn walk(
             snapshot: &mut DomSnapshot,
             node: &NodeRef<HtmlNodeType>,
+            parent: Option<NodeId>,
             dom_ids: &HashMap<usize, u64>,
         ) -> NodeId {
             let id = snapshot.nodes.len() as NodeId;
@@ -80,6 +85,7 @@ impl DomSnapshot {
             snapshot.nodes.push(SnapNode {
                 kind: node_borrow.value.clone(),
                 children: Vec::new(),
+                parent,
                 dom_id: dom_ids
                     .get(&(Rc::as_ptr(node) as usize))
                     .copied()
@@ -91,13 +97,13 @@ impl DomSnapshot {
                 .borrow()
                 .children()
                 .iter()
-                .map(|child| walk(snapshot, child, dom_ids))
+                .map(|child| walk(snapshot, child, Some(id), dom_ids))
                 .collect();
             snapshot.nodes[id as usize].children = children;
             id
         }
         let mut snapshot = DomSnapshot::default();
-        let id = walk(&mut snapshot, root, dom_ids);
+        let id = walk(&mut snapshot, root, None, dom_ids);
         snapshot.roots.push(id);
         snapshot
     }
@@ -134,6 +140,7 @@ impl DomSnapshot {
     fn walk(
         &mut self,
         node: &NodeRef<HtmlNodeType>,
+        parent: Option<NodeId>,
         dom_refs: &mut Vec<Weak<RefCell<TreeNode<HtmlNodeType>>>>,
     ) -> NodeId {
         let id = self.nodes.len() as NodeId;
@@ -142,6 +149,7 @@ impl DomSnapshot {
         self.nodes.push(SnapNode {
             kind: node_borrow.value.clone(),
             children: Vec::new(),
+            parent,
             dom_id: 0,
             checked: crate::engine::html::parser::checkedness(node),
             value,
@@ -151,7 +159,7 @@ impl DomSnapshot {
             .borrow()
             .children()
             .iter()
-            .map(|child| self.walk(child, dom_refs))
+            .map(|child| self.walk(child, Some(id), dom_refs))
             .collect();
         self.nodes[id as usize].children = children;
         id
@@ -175,6 +183,11 @@ impl DomSnapshot {
     /// Child ids of the node with the given id.
     pub fn children(&self, id: NodeId) -> &[NodeId] {
         &self.nodes[id as usize].children
+    }
+
+    /// Parent id of the node, or `None` for a snapshot root.
+    pub fn parent(&self, id: NodeId) -> Option<NodeId> {
+        self.nodes[id as usize].parent
     }
 
     /// Concatenated text content of a node, including descendants.

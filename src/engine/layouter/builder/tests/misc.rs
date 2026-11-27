@@ -295,6 +295,7 @@ fn shadow_dom_slot_projection_does_not_panic() {
     // Shadow root attached to host
     let shadow_root = TreeNode::new(HtmlNodeType::ShadowRoot {
         mode: ShadowRootMode::Open,
+        id: 1,
     });
     TreeNode::add_child(&host, Rc::clone(&shadow_root));
 
