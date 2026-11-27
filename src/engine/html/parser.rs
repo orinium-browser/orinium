@@ -39,6 +39,10 @@ pub enum HtmlNodeType {
     /// Children live here and are not part of the host's normal children.
     ShadowRoot {
         mode: ShadowRootMode,
+        /// Identity of this shadow tree, unique for the process. Selector
+        /// matching and stylesheet scoping compare it, so a `<style>` inside a
+        /// shadow root only applies to that tree.
+        id: u64,
     },
     Text(String),
     Comment(String),
@@ -501,6 +505,19 @@ pub(crate) fn collect_element_nodes(
     }
 }
 
+/// The `id` of the shadow root that owns `node`, when the node lives inside a
+/// shadow tree.
+pub fn shadow_root_owner_id(node: &NodeRef<HtmlNodeType>) -> Option<u64> {
+    let mut current = node.borrow().parent();
+    while let Some(parent) = current {
+        if let HtmlNodeType::ShadowRoot { id, .. } = parent.borrow().value {
+            return Some(id);
+        }
+        current = parent.borrow().parent();
+    }
+    None
+}
+
 pub(crate) fn element_chain(node: &NodeRef<HtmlNodeType>) -> ElementChain {
     let mut chain = Vec::new();
     let mut current = Some(Rc::clone(node));
@@ -641,6 +658,7 @@ fn element_info(node: &NodeRef<HtmlNodeType>) -> Option<ElementInfo> {
         hovered: false,
         active: false,
         shadow_root_id: None,
+        slotted_root: None,
     })
 }
 
@@ -703,6 +721,7 @@ fn basic_element_info(node: &NodeRef<HtmlNodeType>) -> Option<ElementInfo> {
         hovered: false,
         active: false,
         shadow_root_id: None,
+        slotted_root: None,
     })
 }
 

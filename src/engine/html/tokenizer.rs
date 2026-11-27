@@ -234,6 +234,16 @@ impl<'a> Tokenizer<'a> {
         }
     }
 
+    /// The entity candidate held in `buffer`, i.e. everything after the leading
+    /// `&` that entered an escape state. Any further `&` belongs to the raw
+    /// text and stays part of the candidate, so it survives a failed decode.
+    fn buffered_entity(&self) -> String {
+        self.buffer
+            .strip_prefix('&')
+            .unwrap_or(&self.buffer)
+            .to_string()
+    }
+
     /// Emits the current token and clears the buffer.
     fn commit_token(&mut self) {
         self.token = self.current_token.take();
@@ -322,6 +332,27 @@ impl<'a> Tokenizer<'a> {
             }
         }
 
+        // End of input: a pending entity candidate (unterminated `&…`) was only
+        // collected in `buffer`, so flush it before committing the token.
+        if !self.buffer.is_empty() {
+            match self.state {
+                TokenizerState::EscapeDecoding => {
+                    let text = std::mem::take(&mut self.buffer);
+                    match &mut self.current_token {
+                        Some(Token::Text(t)) => t.to_mut().push_str(&text),
+                        _ => self.current_token = Some(Token::Text(Cow::Owned(text))),
+                    }
+                }
+                TokenizerState::AttributeEscapeDecoding => {
+                    let text = std::mem::take(&mut self.buffer);
+                    if let Some(attr) = &mut self.current_attribute {
+                        attr.value.to_mut().push_str(&text);
+                    }
+                }
+                _ => {}
+            }
+        }
+
         // End of input: commit remaining current_token if exists
         if self.current_token.is_some() {
             self.commit_token();
@@ -342,14 +373,16 @@ impl<'a> Tokenizer<'a> {
     fn state_data(&mut self, c: char) {
         match c {
             '<' => {
-                // In raw-text states (<script>, <style>) a `<` only opens a tag
-                // when it is `</` (the closing tag); any other `<` is literal
-                // text (e.g. the `<` inside a JS string like 'di<v').
+                // In raw-text states (<script>, <style>) only the matching end
+                // tag (`</script` / `</style`) closes the element. Every other
+                // `<` — including `</b>` inside a JS string — is literal text,
+                // and must not drop the script text out of raw-text mode (doing
+                // so re-enabled entity decoding and turned `&&` into `&`).
                 let raw_text = matches!(
                     self.state,
                     TokenizerState::ScriptData | TokenizerState::StyleData
                 );
-                if raw_text && !self.input[self.pos..].starts_with('/') {
+                if raw_text && !self.at_raw_text_end_tag() {
                     self.buffer.push('<');
                     match &mut self.current_token {
                         Some(Token::Text(text)) => text.to_mut().push('<'),
@@ -380,12 +413,40 @@ impl<'a> Tokenizer<'a> {
         }
     }
 
+    /// True when the input at `pos` starts the end tag that closes the current
+    /// raw-text element: `</script` in script data, `</style` in style data.
+    ///
+    /// The name must be followed by whitespace, `/`, `>` or end of input, so a
+    /// string like `'</scripture>'` inside a script stays literal.
+    fn at_raw_text_end_tag(&self) -> bool {
+        let name = match self.state {
+            TokenizerState::ScriptData => "script",
+            TokenizerState::StyleData => "style",
+            _ => return false,
+        };
+        let Some(rest) = self.input[self.pos..].strip_prefix('/') else {
+            return false;
+        };
+        let Some(head) = rest.get(..name.len()) else {
+            return false;
+        };
+        if !head.eq_ignore_ascii_case(name) {
+            return false;
+        }
+        match rest[name.len()..].chars().next() {
+            None => true,
+            Some(c) => c.is_ascii_whitespace() || matches!(c, '/' | '>'),
+        }
+    }
+
     fn state_escape_decoding(&mut self, c: char) {
         if c == ';' {
-            let mut iter = self.buffer.rsplitn(2, '&');
-            let entity = iter.next().unwrap_or("");
+            // The buffer holds `&` plus everything after it; a later `&` is
+            // ordinary text, so the whole remainder is the entity candidate
+            // (splitting on the last `&` used to drop earlier ones: `&&` → `&`).
+            let entity = self.buffered_entity();
 
-            let decoded = decode_entity(entity).unwrap_or_else(|| format!("&{};", entity));
+            let decoded = decode_entity(&entity).unwrap_or_else(|| format!("&{};", entity));
 
             match &mut self.current_token {
                 Some(Token::Text(text)) => text.to_mut().push_str(&decoded),
@@ -396,8 +457,7 @@ impl<'a> Tokenizer<'a> {
             self.state = TokenizerState::Data;
         } else if self.buffer.len() > MAX_ENTITY_NAME_LEN || self.input[self.pos..].starts_with('<')
         {
-            let mut iter = self.buffer.rsplitn(2, '&');
-            let entity = iter.next().unwrap_or("");
+            let entity = self.buffered_entity();
             let decoded = format!("&{}", entity);
 
             match &mut self.current_token {
@@ -614,9 +674,8 @@ impl<'a> Tokenizer<'a> {
 
     fn state_attribute_escape_decoding(&mut self, c: char) {
         if c == ';' {
-            let mut iter = self.buffer.rsplitn(2, '&');
-            let entity = iter.next().unwrap_or("");
-            let decoded = decode_entity(entity).unwrap_or_else(|| format!("&{};", entity));
+            let entity = self.buffered_entity();
+            let decoded = decode_entity(&entity).unwrap_or_else(|| format!("&{};", entity));
             if let Some(attr) = &mut self.current_attribute {
                 attr.value.to_mut().push_str(&decoded);
             }
@@ -630,8 +689,7 @@ impl<'a> Tokenizer<'a> {
             // the literal `&…` text and reconsume this character so the
             // active attribute-value state can handle it (closing quote, `>`,
             // whitespace, …).
-            let mut iter = self.buffer.rsplitn(2, '&');
-            let entity = iter.next().unwrap_or("");
+            let entity = self.buffered_entity();
             if let Some(attr) = &mut self.current_attribute {
                 attr.value.to_mut().push_str(&format!("&{}", entity));
             }
@@ -845,6 +903,75 @@ mod tests {
                     name: Cow::Borrowed("script")
                 }
             ]
+        );
+    }
+
+    #[test]
+    fn test_script_data_keeps_markup_and_double_ampersand() {
+        // A JS string containing `</b>` must stay inside script data: only
+        // `</script` closes the element, and the text must not fall back to
+        // data mode where `&&` would be entity-decoded down to `&`.
+        let body = "\nvar s = \"<b id='inside'></b>\";\nvar v = \"B\" && \"C\";\n";
+        let input = format!("<script>{body}</script>");
+        let tokens = collect_tokens(&input);
+        assert_eq!(
+            tokens,
+            vec![
+                Token::StartTag {
+                    name: Cow::Borrowed("script"),
+                    attributes: vec![],
+                    self_closing: false
+                },
+                Token::Text(Cow::Owned(body.to_string())),
+                Token::EndTag {
+                    name: Cow::Borrowed("script")
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn test_script_data_end_tag_must_match() {
+        let input = "<script>a('</scripture>');</script>";
+        let tokens = collect_tokens(input);
+        assert_eq!(
+            tokens,
+            vec![
+                Token::StartTag {
+                    name: Cow::Borrowed("script"),
+                    attributes: vec![],
+                    self_closing: false
+                },
+                Token::Text(Cow::Borrowed("a('</scripture>');")),
+                Token::EndTag {
+                    name: Cow::Borrowed("script")
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn test_invalid_entity_keeps_every_ampersand() {
+        // `&&` is not an entity: both `&` must survive the failed decode.
+        assert_eq!(
+            collect_tokens("a && b"),
+            vec![Token::Text(Cow::Borrowed("a && b"))]
+        );
+        assert_eq!(
+            collect_tokens("x && y;"),
+            vec![Token::Text(Cow::Borrowed("x && y;"))]
+        );
+    }
+
+    #[test]
+    fn test_named_and_numeric_entities_still_decode() {
+        assert_eq!(
+            collect_tokens("a &amp; b"),
+            vec![Token::Text(Cow::Borrowed("a & b"))]
+        );
+        assert_eq!(
+            collect_tokens("&#65;"),
+            vec![Token::Text(Cow::Borrowed("A"))]
         );
     }
 
