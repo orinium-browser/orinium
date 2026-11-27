@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `src/engine/layouter/types.rs`."><title>types.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-0c87338a.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="orinium_browser" data-themes="" data-resource-suffix="" data-rustdoc-version="1.99.1 (58cf8f9c3 2026-10-13)" data-channel="1.99.1" data-search-js="search-cf4fc35e.js" data-stringdex-js="stringdex-b5109af9.js" data-settings-js="settings-170eb4bf.js" ><script src="../../../../static.files/storage-41dd4d93.js"></script><script defer src="../../../../static.files/src-script-813739b1.js"></script><script defer src="../../../../src-files.js"></script><script defer src="../../../../static.files/main-417ebf0a.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-9f56287d.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1><div class="sub-heading">orinium_browser/engine/layouter/</div>types.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-3"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="doccomment">//! Layout tree node types. Styles, text, and container definitions.
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `src/engine/layouter/types.rs`."><title>types.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-203241e4.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="orinium_browser" data-themes="" data-resource-suffix="" data-rustdoc-version="1.100.0 (0ef1bc386 2026-11-09)" data-channel="1.100.0" data-search-js="search-b167f383.js" data-stringdex-js="stringdex-b5109af9.js" data-settings-js="settings-170eb4bf.js" ><script src="../../../../static.files/storage-41dd4d93.js"></script><script defer src="../../../../static.files/src-script-813739b1.js"></script><script defer src="../../../../src-files.js"></script><script defer src="../../../../static.files/main-1814ead3.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-9f56287d.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><h1><div class="sub-heading">orinium_browser/engine/layouter/</div>types.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-3"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="doccomment">//! Layout tree node types. Styles, text, and container definitions.
 <a href=#2 id=2 data-nosnippet>2</a>
 <a href=#3 id=3 data-nosnippet>3</a></span><span class="kw">use </span>std::sync::Arc;
 <a href=#4 id=4 data-nosnippet>4</a>
@@ -748,179 +748,187 @@
 <a href=#748 id=748 data-nosnippet>748</a>    <span class="doccomment">/// HTML tag name (e.g. "html", "body", "div"), used for canvas background
 <a href=#749 id=749 data-nosnippet>749</a>    /// inheritance (root element → body) and other tag-specific behaviors.
 <a href=#750 id=750 data-nosnippet>750</a>    </span><span class="kw">pub </span>tag: <span class="prelude-ty">Option</span>&lt;String&gt;,
-<a href=#751 id=751 data-nosnippet>751</a>}
-<a href=#752 id=752 data-nosnippet>752</a>
-<a href=#753 id=753 data-nosnippet>753</a><span class="kw">impl </span>Default <span class="kw">for </span>ContainerStyle {
-<a href=#754 id=754 data-nosnippet>754</a>    <span class="kw">fn </span>default() -&gt; <span class="self">Self </span>{
-<a href=#755 id=755 data-nosnippet>755</a>        <span class="self">Self </span>{
-<a href=#756 id=756 data-nosnippet>756</a>            cursor: Default::default(),
-<a href=#757 id=757 data-nosnippet>757</a>            background: Default::default(),
-<a href=#758 id=758 data-nosnippet>758</a>            z_index: Default::default(),
-<a href=#759 id=759 data-nosnippet>759</a>            visibility: Default::default(),
-<a href=#760 id=760 data-nosnippet>760</a>            opacity: <span class="number">1.0</span>,
-<a href=#761 id=761 data-nosnippet>761</a>            css_float: Default::default(),
-<a href=#762 id=762 data-nosnippet>762</a>            css_clear: Default::default(),
-<a href=#763 id=763 data-nosnippet>763</a>            border_color: Default::default(),
-<a href=#764 id=764 data-nosnippet>764</a>            border_style: Default::default(),
-<a href=#765 id=765 data-nosnippet>765</a>            border_radius: Default::default(),
-<a href=#766 id=766 data-nosnippet>766</a>            text_align: Default::default(),
-<a href=#767 id=767 data-nosnippet>767</a>            clip_path: Default::default(),
-<a href=#768 id=768 data-nosnippet>768</a>            direction: Default::default(),
-<a href=#769 id=769 data-nosnippet>769</a>            writing_mode: Default::default(),
-<a href=#770 id=770 data-nosnippet>770</a>            anchor: Default::default(),
-<a href=#771 id=771 data-nosnippet>771</a>            transform: <span class="prelude-val">None</span>,
-<a href=#772 id=772 data-nosnippet>772</a>            tag: <span class="prelude-val">None</span>,
-<a href=#773 id=773 data-nosnippet>773</a>        }
-<a href=#774 id=774 data-nosnippet>774</a>    }
-<a href=#775 id=775 data-nosnippet>775</a>}
-<a href=#776 id=776 data-nosnippet>776</a>
-<a href=#777 id=777 data-nosnippet>777</a><span class="comment">// =========================
-<a href=#778 id=778 data-nosnippet>778</a>//           Text
-<a href=#779 id=779 data-nosnippet>779</a>// =========================
-<a href=#780 id=780 data-nosnippet>780</a>
-<a href=#781 id=781 data-nosnippet>781</a></span><span class="attr">#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-<a href=#782 id=782 data-nosnippet>782</a></span><span class="kw">pub enum </span>TextDecoration {
-<a href=#783 id=783 data-nosnippet>783</a>    <span class="attr">#[default]
-<a href=#784 id=784 data-nosnippet>784</a>    </span><span class="prelude-val">None</span>,
-<a href=#785 id=785 data-nosnippet>785</a>    Underline,
-<a href=#786 id=786 data-nosnippet>786</a>    LineThrough,
-<a href=#787 id=787 data-nosnippet>787</a>    Overline,
-<a href=#788 id=788 data-nosnippet>788</a>}
-<a href=#789 id=789 data-nosnippet>789</a>
-<a href=#790 id=790 data-nosnippet>790</a><span class="attr">#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-<a href=#791 id=791 data-nosnippet>791</a></span><span class="kw">pub enum </span>TextTransform {
-<a href=#792 id=792 data-nosnippet>792</a>    <span class="attr">#[default]
-<a href=#793 id=793 data-nosnippet>793</a>    </span><span class="prelude-val">None</span>,
-<a href=#794 id=794 data-nosnippet>794</a>    Uppercase,
-<a href=#795 id=795 data-nosnippet>795</a>    Lowercase,
+<a href=#751 id=751 data-nosnippet>751</a>    <span class="doccomment">/// Named CSS grid column lines and the explicit line indices they denote.
+<a href=#752 id=752 data-nosnippet>752</a>    </span><span class="kw">pub </span>grid_column_lines: Vec&lt;(String, Vec&lt;usize&gt;)&gt;,
+<a href=#753 id=753 data-nosnippet>753</a>    <span class="doccomment">/// Named grid-column placement retained until the parent grid is known.
+<a href=#754 id=754 data-nosnippet>754</a>    </span><span class="kw">pub </span>grid_column_start_name: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#755 id=755 data-nosnippet>755</a>    <span class="kw">pub </span>grid_column_end_name: <span class="prelude-ty">Option</span>&lt;String&gt;,
+<a href=#756 id=756 data-nosnippet>756</a>}
+<a href=#757 id=757 data-nosnippet>757</a>
+<a href=#758 id=758 data-nosnippet>758</a><span class="kw">impl </span>Default <span class="kw">for </span>ContainerStyle {
+<a href=#759 id=759 data-nosnippet>759</a>    <span class="kw">fn </span>default() -&gt; <span class="self">Self </span>{
+<a href=#760 id=760 data-nosnippet>760</a>        <span class="self">Self </span>{
+<a href=#761 id=761 data-nosnippet>761</a>            cursor: Default::default(),
+<a href=#762 id=762 data-nosnippet>762</a>            background: Default::default(),
+<a href=#763 id=763 data-nosnippet>763</a>            z_index: Default::default(),
+<a href=#764 id=764 data-nosnippet>764</a>            visibility: Default::default(),
+<a href=#765 id=765 data-nosnippet>765</a>            opacity: <span class="number">1.0</span>,
+<a href=#766 id=766 data-nosnippet>766</a>            css_float: Default::default(),
+<a href=#767 id=767 data-nosnippet>767</a>            css_clear: Default::default(),
+<a href=#768 id=768 data-nosnippet>768</a>            border_color: Default::default(),
+<a href=#769 id=769 data-nosnippet>769</a>            border_style: Default::default(),
+<a href=#770 id=770 data-nosnippet>770</a>            border_radius: Default::default(),
+<a href=#771 id=771 data-nosnippet>771</a>            text_align: Default::default(),
+<a href=#772 id=772 data-nosnippet>772</a>            clip_path: Default::default(),
+<a href=#773 id=773 data-nosnippet>773</a>            direction: Default::default(),
+<a href=#774 id=774 data-nosnippet>774</a>            writing_mode: Default::default(),
+<a href=#775 id=775 data-nosnippet>775</a>            anchor: Default::default(),
+<a href=#776 id=776 data-nosnippet>776</a>            transform: <span class="prelude-val">None</span>,
+<a href=#777 id=777 data-nosnippet>777</a>            tag: <span class="prelude-val">None</span>,
+<a href=#778 id=778 data-nosnippet>778</a>            grid_column_lines: Vec::new(),
+<a href=#779 id=779 data-nosnippet>779</a>            grid_column_start_name: <span class="prelude-val">None</span>,
+<a href=#780 id=780 data-nosnippet>780</a>            grid_column_end_name: <span class="prelude-val">None</span>,
+<a href=#781 id=781 data-nosnippet>781</a>        }
+<a href=#782 id=782 data-nosnippet>782</a>    }
+<a href=#783 id=783 data-nosnippet>783</a>}
+<a href=#784 id=784 data-nosnippet>784</a>
+<a href=#785 id=785 data-nosnippet>785</a><span class="comment">// =========================
+<a href=#786 id=786 data-nosnippet>786</a>//           Text
+<a href=#787 id=787 data-nosnippet>787</a>// =========================
+<a href=#788 id=788 data-nosnippet>788</a>
+<a href=#789 id=789 data-nosnippet>789</a></span><span class="attr">#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+<a href=#790 id=790 data-nosnippet>790</a></span><span class="kw">pub enum </span>TextDecoration {
+<a href=#791 id=791 data-nosnippet>791</a>    <span class="attr">#[default]
+<a href=#792 id=792 data-nosnippet>792</a>    </span><span class="prelude-val">None</span>,
+<a href=#793 id=793 data-nosnippet>793</a>    Underline,
+<a href=#794 id=794 data-nosnippet>794</a>    LineThrough,
+<a href=#795 id=795 data-nosnippet>795</a>    Overline,
 <a href=#796 id=796 data-nosnippet>796</a>}
 <a href=#797 id=797 data-nosnippet>797</a>
-<a href=#798 id=798 data-nosnippet>798</a><span class="attr">#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
-<a href=#799 id=799 data-nosnippet>799</a></span><span class="kw">pub enum </span>FontStyle {
+<a href=#798 id=798 data-nosnippet>798</a><span class="attr">#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+<a href=#799 id=799 data-nosnippet>799</a></span><span class="kw">pub enum </span>TextTransform {
 <a href=#800 id=800 data-nosnippet>800</a>    <span class="attr">#[default]
-<a href=#801 id=801 data-nosnippet>801</a>    </span>Normal,
-<a href=#802 id=802 data-nosnippet>802</a>    Italic,
-<a href=#803 id=803 data-nosnippet>803</a>    Oblique,
+<a href=#801 id=801 data-nosnippet>801</a>    </span><span class="prelude-val">None</span>,
+<a href=#802 id=802 data-nosnippet>802</a>    Uppercase,
+<a href=#803 id=803 data-nosnippet>803</a>    Lowercase,
 <a href=#804 id=804 data-nosnippet>804</a>}
 <a href=#805 id=805 data-nosnippet>805</a>
-<a href=#806 id=806 data-nosnippet>806</a><span class="attr">#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-<a href=#807 id=807 data-nosnippet>807</a></span><span class="kw">pub struct </span>FontWeight(<span class="kw">pub </span>u16);
-<a href=#808 id=808 data-nosnippet>808</a>
-<a href=#809 id=809 data-nosnippet>809</a><span class="kw">impl </span>FontWeight {
-<a href=#810 id=810 data-nosnippet>810</a>    <span class="kw">pub const </span>THIN: <span class="self">Self </span>= <span class="self">Self</span>(<span class="number">100</span>);
-<a href=#811 id=811 data-nosnippet>811</a>    <span class="kw">pub const </span>NORMAL: <span class="self">Self </span>= <span class="self">Self</span>(<span class="number">400</span>);
-<a href=#812 id=812 data-nosnippet>812</a>    <span class="kw">pub const </span>BOLD: <span class="self">Self </span>= <span class="self">Self</span>(<span class="number">700</span>);
-<a href=#813 id=813 data-nosnippet>813</a>    <span class="kw">pub const </span>BLACK: <span class="self">Self </span>= <span class="self">Self</span>(<span class="number">900</span>);
-<a href=#814 id=814 data-nosnippet>814</a>}
-<a href=#815 id=815 data-nosnippet>815</a>
-<a href=#816 id=816 data-nosnippet>816</a><span class="kw">impl </span>Default <span class="kw">for </span>FontWeight {
-<a href=#817 id=817 data-nosnippet>817</a>    <span class="kw">fn </span>default() -&gt; <span class="self">Self </span>{
-<a href=#818 id=818 data-nosnippet>818</a>        <span class="self">Self</span>::NORMAL
-<a href=#819 id=819 data-nosnippet>819</a>    }
-<a href=#820 id=820 data-nosnippet>820</a>}
-<a href=#821 id=821 data-nosnippet>821</a>
-<a href=#822 id=822 data-nosnippet>822</a><span class="attr">#[derive(Debug, Clone, PartialEq)]
-<a href=#823 id=823 data-nosnippet>823</a></span><span class="kw">pub struct </span>TextStyle {
-<a href=#824 id=824 data-nosnippet>824</a>    <span class="kw">pub </span>text_decoration: TextDecoration,
-<a href=#825 id=825 data-nosnippet>825</a>    <span class="kw">pub </span>text_transform: TextTransform,
-<a href=#826 id=826 data-nosnippet>826</a>    <span class="kw">pub </span>font_style: FontStyle,
-<a href=#827 id=827 data-nosnippet>827</a>    <span class="kw">pub </span>font_weight: FontWeight,
-<a href=#828 id=828 data-nosnippet>828</a>    <span class="kw">pub </span>color: Color,
-<a href=#829 id=829 data-nosnippet>829</a>    <span class="doccomment">/// Override color for text-decoration lines.
-<a href=#830 id=830 data-nosnippet>830</a>    /// `None` means use `color` (currentColor).
-<a href=#831 id=831 data-nosnippet>831</a>    </span><span class="kw">pub </span>text_decoration_color: <span class="prelude-ty">Option</span>&lt;Color&gt;,
-<a href=#832 id=832 data-nosnippet>832</a>    <span class="doccomment">/// Ordered list of font family names (CSS `font-family`).
-<a href=#833 id=833 data-nosnippet>833</a>    /// The first available font is used as primary; glyphs missing from it
-<a href=#834 id=834 data-nosnippet>834</a>    /// fall back to subsequent families. Generic families (e.g. "sans-serif")
-<a href=#835 id=835 data-nosnippet>835</a>    /// are resolved by the text engine.
-<a href=#836 id=836 data-nosnippet>836</a>    </span><span class="kw">pub </span>font_families: Vec&lt;String&gt;,
-<a href=#837 id=837 data-nosnippet>837</a>}
-<a href=#838 id=838 data-nosnippet>838</a>
-<a href=#839 id=839 data-nosnippet>839</a><span class="kw">impl </span>Default <span class="kw">for </span>TextStyle {
-<a href=#840 id=840 data-nosnippet>840</a>    <span class="kw">fn </span>default() -&gt; <span class="self">Self </span>{
-<a href=#841 id=841 data-nosnippet>841</a>        <span class="self">Self </span>{
-<a href=#842 id=842 data-nosnippet>842</a>            text_decoration: TextDecoration::default(),
-<a href=#843 id=843 data-nosnippet>843</a>            text_transform: TextTransform::default(),
-<a href=#844 id=844 data-nosnippet>844</a>            font_style: FontStyle::default(),
-<a href=#845 id=845 data-nosnippet>845</a>            font_weight: FontWeight::default(),
-<a href=#846 id=846 data-nosnippet>846</a>            color: Color::default(),
-<a href=#847 id=847 data-nosnippet>847</a>            text_decoration_color: <span class="prelude-val">None</span>,
-<a href=#848 id=848 data-nosnippet>848</a>            font_families: <span class="macro">vec!</span>[<span class="string">"sans-serif"</span>.to_string()],
-<a href=#849 id=849 data-nosnippet>849</a>        }
-<a href=#850 id=850 data-nosnippet>850</a>    }
-<a href=#851 id=851 data-nosnippet>851</a>}
-<a href=#852 id=852 data-nosnippet>852</a>
-<a href=#853 id=853 data-nosnippet>853</a><span class="attr">#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-<a href=#854 id=854 data-nosnippet>854</a></span><span class="kw">pub enum </span>TextAlign {
-<a href=#855 id=855 data-nosnippet>855</a>    <span class="attr">#[default]
-<a href=#856 id=856 data-nosnippet>856</a>    </span>Left,
-<a href=#857 id=857 data-nosnippet>857</a>    Center,
-<a href=#858 id=858 data-nosnippet>858</a>    Right,
+<a href=#806 id=806 data-nosnippet>806</a><span class="attr">#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
+<a href=#807 id=807 data-nosnippet>807</a></span><span class="kw">pub enum </span>FontStyle {
+<a href=#808 id=808 data-nosnippet>808</a>    <span class="attr">#[default]
+<a href=#809 id=809 data-nosnippet>809</a>    </span>Normal,
+<a href=#810 id=810 data-nosnippet>810</a>    Italic,
+<a href=#811 id=811 data-nosnippet>811</a>    Oblique,
+<a href=#812 id=812 data-nosnippet>812</a>}
+<a href=#813 id=813 data-nosnippet>813</a>
+<a href=#814 id=814 data-nosnippet>814</a><span class="attr">#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+<a href=#815 id=815 data-nosnippet>815</a></span><span class="kw">pub struct </span>FontWeight(<span class="kw">pub </span>u16);
+<a href=#816 id=816 data-nosnippet>816</a>
+<a href=#817 id=817 data-nosnippet>817</a><span class="kw">impl </span>FontWeight {
+<a href=#818 id=818 data-nosnippet>818</a>    <span class="kw">pub const </span>THIN: <span class="self">Self </span>= <span class="self">Self</span>(<span class="number">100</span>);
+<a href=#819 id=819 data-nosnippet>819</a>    <span class="kw">pub const </span>NORMAL: <span class="self">Self </span>= <span class="self">Self</span>(<span class="number">400</span>);
+<a href=#820 id=820 data-nosnippet>820</a>    <span class="kw">pub const </span>BOLD: <span class="self">Self </span>= <span class="self">Self</span>(<span class="number">700</span>);
+<a href=#821 id=821 data-nosnippet>821</a>    <span class="kw">pub const </span>BLACK: <span class="self">Self </span>= <span class="self">Self</span>(<span class="number">900</span>);
+<a href=#822 id=822 data-nosnippet>822</a>}
+<a href=#823 id=823 data-nosnippet>823</a>
+<a href=#824 id=824 data-nosnippet>824</a><span class="kw">impl </span>Default <span class="kw">for </span>FontWeight {
+<a href=#825 id=825 data-nosnippet>825</a>    <span class="kw">fn </span>default() -&gt; <span class="self">Self </span>{
+<a href=#826 id=826 data-nosnippet>826</a>        <span class="self">Self</span>::NORMAL
+<a href=#827 id=827 data-nosnippet>827</a>    }
+<a href=#828 id=828 data-nosnippet>828</a>}
+<a href=#829 id=829 data-nosnippet>829</a>
+<a href=#830 id=830 data-nosnippet>830</a><span class="attr">#[derive(Debug, Clone, PartialEq)]
+<a href=#831 id=831 data-nosnippet>831</a></span><span class="kw">pub struct </span>TextStyle {
+<a href=#832 id=832 data-nosnippet>832</a>    <span class="kw">pub </span>text_decoration: TextDecoration,
+<a href=#833 id=833 data-nosnippet>833</a>    <span class="kw">pub </span>text_transform: TextTransform,
+<a href=#834 id=834 data-nosnippet>834</a>    <span class="kw">pub </span>font_style: FontStyle,
+<a href=#835 id=835 data-nosnippet>835</a>    <span class="kw">pub </span>font_weight: FontWeight,
+<a href=#836 id=836 data-nosnippet>836</a>    <span class="kw">pub </span>color: Color,
+<a href=#837 id=837 data-nosnippet>837</a>    <span class="doccomment">/// Override color for text-decoration lines.
+<a href=#838 id=838 data-nosnippet>838</a>    /// `None` means use `color` (currentColor).
+<a href=#839 id=839 data-nosnippet>839</a>    </span><span class="kw">pub </span>text_decoration_color: <span class="prelude-ty">Option</span>&lt;Color&gt;,
+<a href=#840 id=840 data-nosnippet>840</a>    <span class="doccomment">/// Ordered list of font family names (CSS `font-family`).
+<a href=#841 id=841 data-nosnippet>841</a>    /// The first available font is used as primary; glyphs missing from it
+<a href=#842 id=842 data-nosnippet>842</a>    /// fall back to subsequent families. Generic families (e.g. "sans-serif")
+<a href=#843 id=843 data-nosnippet>843</a>    /// are resolved by the text engine.
+<a href=#844 id=844 data-nosnippet>844</a>    </span><span class="kw">pub </span>font_families: Vec&lt;String&gt;,
+<a href=#845 id=845 data-nosnippet>845</a>}
+<a href=#846 id=846 data-nosnippet>846</a>
+<a href=#847 id=847 data-nosnippet>847</a><span class="kw">impl </span>Default <span class="kw">for </span>TextStyle {
+<a href=#848 id=848 data-nosnippet>848</a>    <span class="kw">fn </span>default() -&gt; <span class="self">Self </span>{
+<a href=#849 id=849 data-nosnippet>849</a>        <span class="self">Self </span>{
+<a href=#850 id=850 data-nosnippet>850</a>            text_decoration: TextDecoration::default(),
+<a href=#851 id=851 data-nosnippet>851</a>            text_transform: TextTransform::default(),
+<a href=#852 id=852 data-nosnippet>852</a>            font_style: FontStyle::default(),
+<a href=#853 id=853 data-nosnippet>853</a>            font_weight: FontWeight::default(),
+<a href=#854 id=854 data-nosnippet>854</a>            color: Color::default(),
+<a href=#855 id=855 data-nosnippet>855</a>            text_decoration_color: <span class="prelude-val">None</span>,
+<a href=#856 id=856 data-nosnippet>856</a>            font_families: <span class="macro">vec!</span>[<span class="string">"sans-serif"</span>.to_string()],
+<a href=#857 id=857 data-nosnippet>857</a>        }
+<a href=#858 id=858 data-nosnippet>858</a>    }
 <a href=#859 id=859 data-nosnippet>859</a>}
 <a href=#860 id=860 data-nosnippet>860</a>
-<a href=#861 id=861 data-nosnippet>861</a><span class="doccomment">/// Line-height representation that preserves raw values for inheritance.
-<a href=#862 id=862 data-nosnippet>862</a>///
-<a href=#863 id=863 data-nosnippet>863</a>/// - `Normal` — keyword `normal`, resolved per element's font_size
-<a href=#864 id=864 data-nosnippet>864</a>/// - `Number(f)` — unitless factor (e.g. 1.5), re-resolved per child's font_size
-<a href=#865 id=865 data-nosnippet>865</a>/// - `Px(px)` — absolute pixel value (from `&lt;length&gt;`, `&lt;percentage&gt;`, `calc()`)
-<a href=#866 id=866 data-nosnippet>866</a></span><span class="attr">#[derive(Debug, Default, Clone, Copy, PartialEq)]
-<a href=#867 id=867 data-nosnippet>867</a></span><span class="kw">pub enum </span>LineHeight {
-<a href=#868 id=868 data-nosnippet>868</a>    <span class="attr">#[default]
-<a href=#869 id=869 data-nosnippet>869</a>    </span>Normal,
-<a href=#870 id=870 data-nosnippet>870</a>    Number(f32),
-<a href=#871 id=871 data-nosnippet>871</a>    Px(f32),
-<a href=#872 id=872 data-nosnippet>872</a>}
-<a href=#873 id=873 data-nosnippet>873</a>
-<a href=#874 id=874 data-nosnippet>874</a><span class="attr">#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-<a href=#875 id=875 data-nosnippet>875</a></span><span class="kw">pub enum </span>VerticalAlign {
+<a href=#861 id=861 data-nosnippet>861</a><span class="attr">#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+<a href=#862 id=862 data-nosnippet>862</a></span><span class="kw">pub enum </span>TextAlign {
+<a href=#863 id=863 data-nosnippet>863</a>    <span class="attr">#[default]
+<a href=#864 id=864 data-nosnippet>864</a>    </span>Left,
+<a href=#865 id=865 data-nosnippet>865</a>    Center,
+<a href=#866 id=866 data-nosnippet>866</a>    Right,
+<a href=#867 id=867 data-nosnippet>867</a>}
+<a href=#868 id=868 data-nosnippet>868</a>
+<a href=#869 id=869 data-nosnippet>869</a><span class="doccomment">/// Line-height representation that preserves raw values for inheritance.
+<a href=#870 id=870 data-nosnippet>870</a>///
+<a href=#871 id=871 data-nosnippet>871</a>/// - `Normal` — keyword `normal`, resolved per element's font_size
+<a href=#872 id=872 data-nosnippet>872</a>/// - `Number(f)` — unitless factor (e.g. 1.5), re-resolved per child's font_size
+<a href=#873 id=873 data-nosnippet>873</a>/// - `Px(px)` — absolute pixel value (from `&lt;length&gt;`, `&lt;percentage&gt;`, `calc()`)
+<a href=#874 id=874 data-nosnippet>874</a></span><span class="attr">#[derive(Debug, Default, Clone, Copy, PartialEq)]
+<a href=#875 id=875 data-nosnippet>875</a></span><span class="kw">pub enum </span>LineHeight {
 <a href=#876 id=876 data-nosnippet>876</a>    <span class="attr">#[default]
-<a href=#877 id=877 data-nosnippet>877</a>    </span>Baseline,
-<a href=#878 id=878 data-nosnippet>878</a>    Sub,
-<a href=#879 id=879 data-nosnippet>879</a>    Super,
-<a href=#880 id=880 data-nosnippet>880</a>    Top,
-<a href=#881 id=881 data-nosnippet>881</a>    Bottom,
-<a href=#882 id=882 data-nosnippet>882</a>    Middle,
-<a href=#883 id=883 data-nosnippet>883</a>}
-<a href=#884 id=884 data-nosnippet>884</a>
-<a href=#885 id=885 data-nosnippet>885</a><span class="attr">#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-<a href=#886 id=886 data-nosnippet>886</a></span><span class="kw">pub enum </span>WhiteSpace {
-<a href=#887 id=887 data-nosnippet>887</a>    <span class="attr">#[default]
-<a href=#888 id=888 data-nosnippet>888</a>    </span>Normal,
-<a href=#889 id=889 data-nosnippet>889</a>    Nowrap,
-<a href=#890 id=890 data-nosnippet>890</a>    Pre,
-<a href=#891 id=891 data-nosnippet>891</a>    PreWrap,
-<a href=#892 id=892 data-nosnippet>892</a>    PreLine,
-<a href=#893 id=893 data-nosnippet>893</a>    BreakSpaces,
-<a href=#894 id=894 data-nosnippet>894</a>}
-<a href=#895 id=895 data-nosnippet>895</a>
-<a href=#896 id=896 data-nosnippet>896</a><span class="attr">#[derive(Debug, Copy, Clone, PartialEq)]
-<a href=#897 id=897 data-nosnippet>897</a></span><span class="kw">pub struct </span>TextFlowStyle {
-<a href=#898 id=898 data-nosnippet>898</a>    <span class="kw">pub </span>font_size: f32,
-<a href=#899 id=899 data-nosnippet>899</a>    <span class="kw">pub </span>text_align: TextAlign,
-<a href=#900 id=900 data-nosnippet>900</a>    <span class="kw">pub </span>line_height: LineHeight,
-<a href=#901 id=901 data-nosnippet>901</a>    <span class="kw">pub </span>vertical_align: VerticalAlign,
-<a href=#902 id=902 data-nosnippet>902</a>    <span class="kw">pub </span>white_space: WhiteSpace,
-<a href=#903 id=903 data-nosnippet>903</a>}
-<a href=#904 id=904 data-nosnippet>904</a>
-<a href=#905 id=905 data-nosnippet>905</a><span class="kw">impl </span>Default <span class="kw">for </span>TextFlowStyle {
-<a href=#906 id=906 data-nosnippet>906</a>    <span class="kw">fn </span>default() -&gt; <span class="self">Self </span>{
-<a href=#907 id=907 data-nosnippet>907</a>        <span class="self">Self </span>{
-<a href=#908 id=908 data-nosnippet>908</a>            font_size: <span class="number">16.0</span>,
-<a href=#909 id=909 data-nosnippet>909</a>            text_align: Default::default(),
-<a href=#910 id=910 data-nosnippet>910</a>            line_height: Default::default(),
-<a href=#911 id=911 data-nosnippet>911</a>            vertical_align: Default::default(),
-<a href=#912 id=912 data-nosnippet>912</a>            white_space: Default::default(),
-<a href=#913 id=913 data-nosnippet>913</a>        }
-<a href=#914 id=914 data-nosnippet>914</a>    }
-<a href=#915 id=915 data-nosnippet>915</a>}
-<a href=#916 id=916 data-nosnippet>916</a>
-<a href=#917 id=917 data-nosnippet>917</a><span class="doccomment">/// Pointer interaction state passed into layout/style resolution.
-<a href=#918 id=918 data-nosnippet>918</a>///
-<a href=#919 id=919 data-nosnippet>919</a>/// Paths are stored root-to-target and may contain duplicate-free DOM
-<a href=#920 id=920 data-nosnippet>920</a>/// snapshot node ids for the hit target and its ancestors.
-<a href=#921 id=921 data-nosnippet>921</a></span><span class="attr">#[derive(Debug, Clone, Default, PartialEq, Eq)]
-<a href=#922 id=922 data-nosnippet>922</a></span><span class="kw">pub struct </span>InteractionState {
-<a href=#923 id=923 data-nosnippet>923</a>    <span class="kw">pub </span>hovered_path: Vec&lt;NodeId&gt;,
-<a href=#924 id=924 data-nosnippet>924</a>    <span class="kw">pub </span>active_path: Vec&lt;NodeId&gt;,
-<a href=#925 id=925 data-nosnippet>925</a>}
+<a href=#877 id=877 data-nosnippet>877</a>    </span>Normal,
+<a href=#878 id=878 data-nosnippet>878</a>    Number(f32),
+<a href=#879 id=879 data-nosnippet>879</a>    Px(f32),
+<a href=#880 id=880 data-nosnippet>880</a>}
+<a href=#881 id=881 data-nosnippet>881</a>
+<a href=#882 id=882 data-nosnippet>882</a><span class="attr">#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+<a href=#883 id=883 data-nosnippet>883</a></span><span class="kw">pub enum </span>VerticalAlign {
+<a href=#884 id=884 data-nosnippet>884</a>    <span class="attr">#[default]
+<a href=#885 id=885 data-nosnippet>885</a>    </span>Baseline,
+<a href=#886 id=886 data-nosnippet>886</a>    Sub,
+<a href=#887 id=887 data-nosnippet>887</a>    Super,
+<a href=#888 id=888 data-nosnippet>888</a>    Top,
+<a href=#889 id=889 data-nosnippet>889</a>    Bottom,
+<a href=#890 id=890 data-nosnippet>890</a>    Middle,
+<a href=#891 id=891 data-nosnippet>891</a>}
+<a href=#892 id=892 data-nosnippet>892</a>
+<a href=#893 id=893 data-nosnippet>893</a><span class="attr">#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+<a href=#894 id=894 data-nosnippet>894</a></span><span class="kw">pub enum </span>WhiteSpace {
+<a href=#895 id=895 data-nosnippet>895</a>    <span class="attr">#[default]
+<a href=#896 id=896 data-nosnippet>896</a>    </span>Normal,
+<a href=#897 id=897 data-nosnippet>897</a>    Nowrap,
+<a href=#898 id=898 data-nosnippet>898</a>    Pre,
+<a href=#899 id=899 data-nosnippet>899</a>    PreWrap,
+<a href=#900 id=900 data-nosnippet>900</a>    PreLine,
+<a href=#901 id=901 data-nosnippet>901</a>    BreakSpaces,
+<a href=#902 id=902 data-nosnippet>902</a>}
+<a href=#903 id=903 data-nosnippet>903</a>
+<a href=#904 id=904 data-nosnippet>904</a><span class="attr">#[derive(Debug, Copy, Clone, PartialEq)]
+<a href=#905 id=905 data-nosnippet>905</a></span><span class="kw">pub struct </span>TextFlowStyle {
+<a href=#906 id=906 data-nosnippet>906</a>    <span class="kw">pub </span>font_size: f32,
+<a href=#907 id=907 data-nosnippet>907</a>    <span class="kw">pub </span>text_align: TextAlign,
+<a href=#908 id=908 data-nosnippet>908</a>    <span class="kw">pub </span>line_height: LineHeight,
+<a href=#909 id=909 data-nosnippet>909</a>    <span class="kw">pub </span>vertical_align: VerticalAlign,
+<a href=#910 id=910 data-nosnippet>910</a>    <span class="kw">pub </span>white_space: WhiteSpace,
+<a href=#911 id=911 data-nosnippet>911</a>}
+<a href=#912 id=912 data-nosnippet>912</a>
+<a href=#913 id=913 data-nosnippet>913</a><span class="kw">impl </span>Default <span class="kw">for </span>TextFlowStyle {
+<a href=#914 id=914 data-nosnippet>914</a>    <span class="kw">fn </span>default() -&gt; <span class="self">Self </span>{
+<a href=#915 id=915 data-nosnippet>915</a>        <span class="self">Self </span>{
+<a href=#916 id=916 data-nosnippet>916</a>            font_size: <span class="number">16.0</span>,
+<a href=#917 id=917 data-nosnippet>917</a>            text_align: Default::default(),
+<a href=#918 id=918 data-nosnippet>918</a>            line_height: Default::default(),
+<a href=#919 id=919 data-nosnippet>919</a>            vertical_align: Default::default(),
+<a href=#920 id=920 data-nosnippet>920</a>            white_space: Default::default(),
+<a href=#921 id=921 data-nosnippet>921</a>        }
+<a href=#922 id=922 data-nosnippet>922</a>    }
+<a href=#923 id=923 data-nosnippet>923</a>}
+<a href=#924 id=924 data-nosnippet>924</a>
+<a href=#925 id=925 data-nosnippet>925</a><span class="doccomment">/// Pointer interaction state passed into layout/style resolution.
+<a href=#926 id=926 data-nosnippet>926</a>///
+<a href=#927 id=927 data-nosnippet>927</a>/// Paths are stored root-to-target and may contain duplicate-free DOM
+<a href=#928 id=928 data-nosnippet>928</a>/// snapshot node ids for the hit target and its ancestors.
+<a href=#929 id=929 data-nosnippet>929</a></span><span class="attr">#[derive(Debug, Clone, Default, PartialEq, Eq)]
+<a href=#930 id=930 data-nosnippet>930</a></span><span class="kw">pub struct </span>InteractionState {
+<a href=#931 id=931 data-nosnippet>931</a>    <span class="kw">pub </span>hovered_path: Vec&lt;NodeId&gt;,
+<a href=#932 id=932 data-nosnippet>932</a>    <span class="kw">pub </span>active_path: Vec&lt;NodeId&gt;,
+<a href=#933 id=933 data-nosnippet>933</a>}
 </code></pre></div></section></main></body></html>

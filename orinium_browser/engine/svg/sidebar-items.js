@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["collect_svg","emit_commands","parse_view_box","path_from_d","rasterize_from_bytes","viewbox_meet_transform"],"struct":["ClipPath","RasterResult","SvgContent","SvgShape","SvgStroke"],"type":["ViewBox"]};
+window.SIDEBAR_ITEMS = {"fn":["collect_svg","emit_commands","parse_view_box","path_from_d","rasterize_from_bytes","rasterize_many","svg_to_draw_commands","viewbox_meet_transform"],"struct":["ClipPath","RasterResult","SvgContent","SvgShape","SvgStroke"],"type":["ViewBox"]};
