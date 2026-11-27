@@ -1409,20 +1409,35 @@ impl WebView {
             &CssParser::new(USER_AGENT_CSS).parse().unwrap(),
             layouter::css_resolver::StyleOrigin::UserAgent,
         );
+        // Only the (cfg-gated) profile log reads the count.
+        #[cfg(any(feature = "profile", debug_assertions))]
         let mut stylesheet_count = 1;
         for source in &self.linked_css {
             let sheet = CssParser::new(source).parse_lossy();
             resolved.append(layouter::css_resolver::CssResolver::resolve_stylesheet(
                 &sheet,
             ));
-            stylesheet_count += 1;
+            #[cfg(any(feature = "profile", debug_assertions))]
+            {
+                stylesheet_count += 1;
+            }
         }
-        for source in document.dom.collect_text_by_tag("style") {
+        for style in document.dom.get_elements_by_tag_name("style") {
+            let source = DomTree::inner_text(&style);
             let sheet = CssParser::new(&source).parse_lossy();
-            resolved.append(layouter::css_resolver::CssResolver::resolve_stylesheet(
-                &sheet,
-            ));
-            stylesheet_count += 1;
+            let mut sheet_resolution =
+                layouter::css_resolver::CssResolver::resolve_stylesheet(&sheet);
+            // A `<style>` inside a shadow root styles that tree only.
+            if let Some(shadow_root_id) =
+                crate::engine::html::parser::shadow_root_owner_id(&style)
+            {
+                sheet_resolution.set_shadow_root(shadow_root_id);
+            }
+            resolved.append(sheet_resolution);
+            #[cfg(any(feature = "profile", debug_assertions))]
+            {
+                stylesheet_count += 1;
+            }
         }
         #[cfg(any(feature = "profile", debug_assertions))]
         let resolve_styles_time = resolve_styles.elapsed();
