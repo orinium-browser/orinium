@@ -882,18 +882,14 @@ mod tests {
     fn part_selector_matches_exported_part_through_its_host() {
         let selector = parse_selector("style-host::part(panel)");
 
-        assert!(selector.matches(&chain([
-            part_element("panel", 7),
-            host("style-host")
-        ])));
+        assert!(selector.matches(&chain([part_element("panel", 7), host("style-host")])));
         // The part token must be exported by the element itself.
-        assert!(!selector.matches(&chain([
-            part_element("other", 7),
-            host("style-host")
-        ])));
+        assert!(!selector.matches(&chain([part_element("other", 7), host("style-host")])));
         // A selector for a different host must not reach the part.
-        assert!(!parse_selector("other-host::part(panel)")
-            .matches(&chain([part_element("panel", 7), host("style-host")])));
+        assert!(
+            !parse_selector("other-host::part(panel)")
+                .matches(&chain([part_element("panel", 7), host("style-host")]))
+        );
     }
 
     #[test]
@@ -1304,10 +1300,7 @@ mod tests {
         el_in_shadow.attributes = vec![("part".into(), "foo".into())].into();
 
         let selector = parse_selector("style-host::part(foo)");
-        assert!(selector.matches(&chain([
-            el_in_shadow.clone(),
-            host("style-host")
-        ])));
+        assert!(selector.matches(&chain([el_in_shadow.clone(), host("style-host")])));
         assert!(!selector.matches(&chain([el_in_shadow.clone(), host("other-host")])));
 
         // Without a shadow host above it, the part is not exported to anyone.

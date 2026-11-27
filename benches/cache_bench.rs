@@ -357,7 +357,9 @@ fn bench_selector_match_cache(c: &mut Criterion) {
         let mut cache = SelectorMatchCache::new();
         for (s_idx, selector) in selectors.iter().enumerate() {
             for node in 0..node_count {
-                cache.get_or_insert(selector, node, None, || (s_idx as u32 + node).is_multiple_of(2));
+                cache.get_or_insert(selector, node, None, || {
+                    (s_idx as u32 + node).is_multiple_of(2)
+                });
             }
         }
 
@@ -389,13 +391,17 @@ fn bench_selector_match_cache(c: &mut Criterion) {
         let mut cache = SelectorMatchCache::with_capacity(4096);
         for (s_idx, selector) in selectors.iter().enumerate() {
             for node in 0..node_count {
-                cache.get_or_insert(selector, node, None, || (s_idx as u32 + node).is_multiple_of(2));
+                cache.get_or_insert(selector, node, None, || {
+                    (s_idx as u32 + node).is_multiple_of(2)
+                });
             }
         }
         // Fill beyond capacity with different keys to create skips.
         for (s_idx, selector) in selectors.iter().enumerate() {
             for node in node_count..(node_count * 2) {
-                cache.get_or_insert(selector, node, None, || (s_idx as u32 + node).is_multiple_of(2));
+                cache.get_or_insert(selector, node, None, || {
+                    (s_idx as u32 + node).is_multiple_of(2)
+                });
             }
         }
 

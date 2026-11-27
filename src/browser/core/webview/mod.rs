@@ -1428,8 +1428,7 @@ impl WebView {
             let mut sheet_resolution =
                 layouter::css_resolver::CssResolver::resolve_stylesheet(&sheet);
             // A `<style>` inside a shadow root styles that tree only.
-            if let Some(shadow_root_id) =
-                crate::engine::html::parser::shadow_root_owner_id(&style)
+            if let Some(shadow_root_id) = crate::engine::html::parser::shadow_root_owner_id(&style)
             {
                 sheet_resolution.set_shadow_root(shadow_root_id);
             }

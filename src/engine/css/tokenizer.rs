@@ -244,8 +244,7 @@ impl Tokenizer {
 
         while let Some(c) = self.peek() {
             if c == '\\' {
-                let buf =
-                    owned.get_or_insert_with(|| self.slice_to_string(start, self.pos));
+                let buf = owned.get_or_insert_with(|| self.slice_to_string(start, self.pos));
                 if let Some(escaped) = self.consume_escape() {
                     buf.push(escaped);
                 }
@@ -385,9 +384,7 @@ impl Tokenizer {
             }
         }
 
-        let value: f32 = self.slice_to_string(start, self.pos)
-            .parse()
-            .unwrap_or(0.0);
+        let value: f32 = self.slice_to_string(start, self.pos).parse().unwrap_or(0.0);
 
         match self.peek() {
             Some('%') => {
@@ -400,9 +397,8 @@ impl Tokenizer {
 
                 while let Some(c) = self.peek() {
                     if c == '\\' {
-                        let buf = owned.get_or_insert_with(|| {
-                            self.slice_to_string(unit_start, self.pos)
-                        });
+                        let buf =
+                            owned.get_or_insert_with(|| self.slice_to_string(unit_start, self.pos));
                         if let Some(escaped) = self.consume_escape() {
                             buf.push(escaped);
                         }
@@ -568,7 +564,11 @@ mod tests {
 
         assert_eq!(
             tokens,
-            vec![Token::Delim('.'), Token::Ident("123".to_string()), Token::EOF,]
+            vec![
+                Token::Delim('.'),
+                Token::Ident("123".to_string()),
+                Token::EOF,
+            ]
         );
     }
 
@@ -609,7 +609,11 @@ mod tests {
 
         assert_eq!(
             tokens,
-            vec![Token::Delim('.'), Token::Ident("foo".to_string()), Token::EOF,]
+            vec![
+                Token::Delim('.'),
+                Token::Ident("foo".to_string()),
+                Token::EOF,
+            ]
         );
     }
 
@@ -619,7 +623,11 @@ mod tests {
 
         assert_eq!(
             tokens,
-            vec![Token::Delim('.'), Token::Ident("foobar".to_string()), Token::EOF,]
+            vec![
+                Token::Delim('.'),
+                Token::Ident("foobar".to_string()),
+                Token::EOF,
+            ]
         );
     }
 

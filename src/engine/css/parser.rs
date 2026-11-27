@@ -1025,10 +1025,7 @@ impl Parser {
         }
     }
 
-    fn parse_at_query_range(
-        tokens: &[Token],
-        cursor: &mut usize,
-    ) -> ParseResult<Option<AtQuery>> {
+    fn parse_at_query_range(tokens: &[Token], cursor: &mut usize) -> ParseResult<Option<AtQuery>> {
         let start = *cursor;
 
         // `width <= 1044px`
