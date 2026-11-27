@@ -2326,6 +2326,7 @@ fn print_js_expr(expr: &pixi_byte::parser::Expression, indent: usize) {
         Expression::Literal(Literal::Number(v)) => println!("{pad}Literal {v}"),
         Expression::Literal(Literal::BigInt(v)) => println!("{pad}Literal {v}n"),
         Expression::Literal(Literal::String(v)) => println!("{pad}Literal {v:?}"),
+        Expression::Hole => println!("{pad}Hole"),
         Expression::Identifier(name) => println!("{pad}Identifier {name:?}"),
         Expression::This => println!("{pad}This"),
         Expression::Super => println!("{pad}Super"),

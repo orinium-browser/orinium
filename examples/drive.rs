@@ -624,6 +624,20 @@ fn fetch_ok(core: &AsyncNetworkCore, url: &Url) -> Option<Response> {
             body,
         });
     }
+    if url.scheme() == "resource" {
+        let path = url.as_str().strip_prefix("resource:///").unwrap_or("");
+        let body = orinium_browser::platform::io::load_resource(path).ok()?;
+        return Some(Response {
+            url: url.to_string(),
+            status: StatusCode(200),
+            reason_phrase: "OK".to_string(),
+            headers: vec![(
+                "Content-Type".to_string(),
+                "application/octet-stream".to_string(),
+            )],
+            body,
+        });
+    }
     if url.scheme() != "http" && url.scheme() != "https" {
         return None;
     }
@@ -642,6 +656,21 @@ fn fetch_ok(core: &AsyncNetworkCore, url: &Url) -> Option<Response> {
 
 /// Fetches the probe's initial document with navigation-grade headers.
 fn fetch_document(core: &AsyncNetworkCore, url: &Url) -> Response {
+    if url.scheme() == "resource" {
+        let path = url.as_str().strip_prefix("resource:///").unwrap_or("");
+        let body = orinium_browser::platform::io::load_resource(path)
+            .unwrap_or_else(|e| panic!("fetch resource {url}: {e}"));
+        return Response {
+            url: url.to_string(),
+            status: StatusCode(200),
+            reason_phrase: "OK".to_string(),
+            headers: vec![(
+                "Content-Type".to_string(),
+                "text/html; charset=utf-8".to_string(),
+            )],
+            body,
+        };
+    }
     core.fetch_request_blocking(&NetworkRequest {
         url: url.to_string(),
         method: "GET".to_string(),
@@ -787,6 +816,19 @@ fn drive(target: Url) {
             break;
         }
         std::thread::sleep(Duration::from_millis(10));
+    }
+
+    // Optional one-shot interaction probe: run `DRIVE_EVAL` on the page and
+    // keep the pipeline alive for `DRIVE_EVAL_SECS` so timers and listeners
+    // it schedules can settle before the report is read.
+    if let Ok(script) = std::env::var("DRIVE_EVAL") {
+        log::info!(target: "ytprobe", "running DRIVE_EVAL script");
+        send_probe_script(&mut probe.wv, &script);
+        let secs = std::env::var("DRIVE_EVAL_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(30);
+        probe.pump_for(Duration::from_secs(secs));
     }
 
     // Let the last script finish, then collect the page report.
@@ -937,6 +979,15 @@ fn drive(target: Url) {
                 "  marker <{marker}>: {}",
                 counts.get(marker).copied().unwrap_or(0)
             );
+        }
+        // Print the text of the elements named by `DRIVE_TEXT_IDS` (comma
+        // separated ids), so a probe script can publish its findings in the
+        // DOM without a separate eval channel.
+        if let Ok(ids) = std::env::var("DRIVE_TEXT_IDS") {
+            for id in ids.split(',') {
+                let id = id.trim();
+                eprintln!("  #{id} = {:?}", element_text_by_id(document, id));
+            }
         }
     } else {
         eprintln!("\n[probe] getDocument failed");
