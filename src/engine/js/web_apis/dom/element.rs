@@ -108,6 +108,18 @@ pub(crate) fn make_element_interface() -> (Rc<RefCell<JSObject>>, Rc<RefCell<JSO
         accessor_property(get_element_selected, set_element_selected),
     );
     prototype.define_property(
+        "hidden".to_string(),
+        accessor_property(get_element_hidden, set_element_hidden),
+    );
+    prototype.define_property(
+        "options".to_string(),
+        read_only_accessor_property(get_element_options),
+    );
+    prototype.define_property(
+        "selectedIndex".to_string(),
+        accessor_property(get_element_selected_index, set_element_selected_index),
+    );
+    prototype.define_property(
         "disabled".to_string(),
         accessor_property(get_element_disabled, set_element_disabled),
     );
@@ -4602,8 +4614,198 @@ fn set_element_default_checked(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSVa
     Ok(JSValue::undefined())
 }
 
+/// All `<option>` descendants of a `<select>`, in document order (including
+/// options nested in `<optgroup>`).
+fn select_options(select: &NodeRef<HtmlNodeType>) -> Vec<NodeRef<HtmlNodeType>> {
+    let mut options = Vec::new();
+    let mut stack: Vec<NodeRef<HtmlNodeType>> =
+        select.borrow().children().iter().rev().cloned().collect();
+    while let Some(node) = stack.pop() {
+        let tag = node.borrow().value.tag_name().map(str::to_ascii_lowercase);
+        match tag.as_deref() {
+            Some("option") => options.push(node),
+            // A nested select is invalid markup; do not leak its options.
+            Some("select") => {}
+            _ => {
+                let children = node.borrow().children().to_vec();
+                stack.extend(children.into_iter().rev());
+            }
+        }
+    }
+    options
+}
+
+/// `option.value`: the `value` content attribute, else its text content.
+fn select_option_value(option: &NodeRef<HtmlNodeType>) -> String {
+    if let Some(value) = option.borrow().value.get_attr("value") {
+        return value.to_string();
+    }
+    DomTree::inner_text(option).trim().to_string()
+}
+
+/// `select.value`: the option carrying the `selected` attribute. A value
+/// written by the renderer (the user picked in the native popup) is mirrored
+/// on the select itself, so that is consulted before falling back to the first
+/// option, which a single select exposes when nothing is explicitly selected.
+fn select_value(select: &NodeRef<HtmlNodeType>) -> String {
+    let options = select_options(select);
+    if let Some(option) = options
+        .iter()
+        .find(|option| option.borrow().value.has_attr("selected"))
+    {
+        return select_option_value(option);
+    }
+    if let Some(value) = select.borrow().value.get_attr("value") {
+        return value.to_string();
+    }
+    options.first().map(select_option_value).unwrap_or_default()
+}
+
+/// Applies `select.value = value` by moving the `selected` attribute to the
+/// matching option, mirroring the value onto the select so the renderer and
+/// form submission observe the same state.
+fn set_select_value(vm: &mut VM, select: &NodeRef<HtmlNodeType>, value: &str) {
+    let options = select_options(select);
+    let mut matched = false;
+    for option in &options {
+        let select_it = !matched && select_option_value(option) == value;
+        if select_it {
+            matched = true;
+        }
+        let mut option = option.borrow_mut();
+        if select_it {
+            option.value.set_attr("selected", String::new());
+        } else {
+            option.value.remove_attr("selected");
+        }
+    }
+    {
+        let mut select = select.borrow_mut();
+        if matched {
+            select.value.set_attr("value", value.to_string());
+        } else {
+            select.value.remove_attr("value");
+        }
+    }
+    mark_dom_dirty(vm);
+}
+
+fn set_select_selected_index(vm: &mut VM, select: &NodeRef<HtmlNodeType>, index: isize) {
+    let options = select_options(select);
+    for (position, option) in options.iter().enumerate() {
+        let select_it = position as isize == index;
+        let mut option = option.borrow_mut();
+        if select_it {
+            option.value.set_attr("selected", String::new());
+        } else {
+            option.value.remove_attr("selected");
+        }
+    }
+    let value = options
+        .get(index.max(0) as usize)
+        .filter(|_| index >= 0)
+        .map(select_option_value);
+    {
+        let mut select = select.borrow_mut();
+        match value {
+            Some(value) => {
+                select.value.set_attr("value", value);
+            }
+            None => {
+                select.value.remove_attr("value");
+            }
+        }
+    }
+    mark_dom_dirty(vm);
+}
+
+fn is_select_element(node: &NodeRef<HtmlNodeType>) -> bool {
+    node.borrow()
+        .value
+        .tag_name()
+        .is_some_and(|tag| tag.eq_ignore_ascii_case("select"))
+}
+
 fn get_element_value(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    if let Some(node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) {
+        if is_select_element(&node) {
+            return Ok(JSValue::from_string(select_value(&node)));
+        }
+        let is_option = node
+            .borrow()
+            .value
+            .tag_name()
+            .is_some_and(|tag| tag.eq_ignore_ascii_case("option"));
+        if is_option {
+            return Ok(JSValue::from_string(select_option_value(&node)));
+        }
+    }
     reflected_string_property(vm, &args, "value")
+}
+
+/// `select.options`: the option elements as an array-like collection.
+fn get_element_options(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
+        return Ok(vm.array_from_values(Vec::new()));
+    };
+    let values: Vec<JSValue> = select_options(&node)
+        .into_iter()
+        .filter_map(|option| expose_node(vm, option))
+        .collect();
+    let array = vm.array_from_values(values);
+    if let Some(object) = array.as_object() {
+        object.borrow_mut().set(
+            "item".to_string(),
+            JSValue::from_native_function(element_options_item),
+        );
+    }
+    Ok(array)
+}
+
+/// `select.options.item(index)`.
+fn element_options_item(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let _ = vm;
+    let Some(receiver) = args.first().and_then(JSValue::as_object) else {
+        return Ok(JSValue::null());
+    };
+    let index = args.get(1).and_then(JSValue::as_number).unwrap_or(-1.0);
+    if index < 0.0 {
+        return Ok(JSValue::null());
+    }
+    let value = receiver.borrow().get(&(index as usize).to_string());
+    Ok(if value.is_undefined() {
+        JSValue::null()
+    } else {
+        value
+    })
+}
+
+fn get_element_selected_index(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
+        return Ok(JSValue::from_number(-1.0));
+    };
+    let options = select_options(&node);
+    if let Some(index) = options
+        .iter()
+        .position(|option| option.borrow().value.has_attr("selected"))
+    {
+        return Ok(JSValue::from_number(index as f64));
+    }
+    let multiple = node.borrow().value.has_attr("multiple");
+    if !multiple && !options.is_empty() {
+        Ok(JSValue::from_number(0.0))
+    } else {
+        Ok(JSValue::from_number(-1.0))
+    }
+}
+
+fn set_element_selected_index(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let Some(node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED)) else {
+        return Ok(JSValue::undefined());
+    };
+    let index = args.get(1).and_then(JSValue::as_number).unwrap_or(-1.0) as isize;
+    set_select_selected_index(vm, &node, index);
+    Ok(JSValue::undefined())
 }
 
 /// `type` is an enumerated attribute, so the IDL property reports the canonical
@@ -4632,6 +4834,13 @@ fn set_element_type(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
 }
 
 fn set_element_value(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
+    let value = args.get(1).map(JSValue::to_string).unwrap_or_default();
+    if let Some(node) = dom_node(vm, args.first().unwrap_or(&UNDEFINED))
+        && is_select_element(&node)
+    {
+        set_select_value(vm, &node, &value);
+        return Ok(JSValue::undefined());
+    }
     set_reflected_string_property(vm, &args, "value")
 }
 
@@ -5551,6 +5760,8 @@ macro_rules! reflected_boolean_accessors {
 }
 
 reflected_boolean_accessors!(get_element_selected, set_element_selected, "selected");
+reflected_boolean_accessors!(get_element_hidden, set_element_hidden, "hidden");
+
 reflected_boolean_accessors!(get_element_disabled, set_element_disabled, "disabled");
 reflected_boolean_accessors!(get_element_multiple, set_element_multiple, "multiple");
 reflected_boolean_accessors!(get_element_async, set_element_async, "async");

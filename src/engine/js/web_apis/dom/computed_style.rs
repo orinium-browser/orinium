@@ -49,16 +49,24 @@ struct TreeSnapshot {
     dom_version: u64,
     viewport: (f32, f32),
     snapshot: DomSnapshot,
-    sheets: Vec<String>,
+    sheets: Vec<StyleSheet>,
 }
 
 /// The stylesheet half of the cascade, which only depends on the collected
-/// `<style>` texts and the viewport.
+/// `<style>` elements and the viewport.
 struct Rules {
     css_generation: u64,
     viewport: (f32, f32),
-    sheets: Vec<String>,
+    sheets: Vec<StyleSheet>,
     rules: RuleSet,
+}
+
+/// One `<style>` element's CSS text plus the shadow tree that owns it, so the
+/// cascade can scope it to that tree.
+#[derive(Clone, PartialEq, Eq)]
+struct StyleSheet {
+    text: String,
+    shadow_root: Option<u64>,
 }
 
 /// Resolves computed declarations, caching the per-tree snapshot and the rule
@@ -146,7 +154,7 @@ impl Resolver {
 
     /// Reuses the cached rule set when the stylesheets are unchanged, and
     /// returns the generation the resulting rules belong to.
-    fn settle_css(&mut self, sheets: Vec<String>, environment: &MediaEnvironment) -> u64 {
+    fn settle_css(&mut self, sheets: Vec<StyleSheet>, environment: &MediaEnvironment) -> u64 {
         let viewport = environment.viewport();
         let current = self
             .rules
@@ -240,11 +248,15 @@ fn user_agent_declarations() -> &'static ResolvedStyles {
     })
 }
 
-fn build_rule_set(sheets: &[String], environment: &MediaEnvironment) -> RuleSet {
+fn build_rule_set(sheets: &[StyleSheet], environment: &MediaEnvironment) -> RuleSet {
     let mut resolved = user_agent_declarations().clone();
-    for css in sheets {
-        if let Ok(stylesheet) = CssParser::new(css).parse() {
-            append_resolved_styles(&mut resolved, CssResolver::resolve(&stylesheet));
+    for sheet in sheets {
+        if let Ok(stylesheet) = CssParser::new(&sheet.text).parse() {
+            let mut resolution = CssResolver::resolve_stylesheet(&stylesheet);
+            if let Some(shadow_root) = sheet.shadow_root {
+                resolution.set_shadow_root(shadow_root);
+            }
+            append_resolved_styles(&mut resolved, resolution.declarations);
         }
     }
     RuleSet::from_declarations(&resolved, environment)
@@ -253,7 +265,7 @@ fn build_rule_set(sheets: &[String], environment: &MediaEnvironment) -> RuleSet 
 /// Collects the CSS text of every `<style>` element under `root` in document
 /// order. `<style>` content is a raw text child, so only direct text children
 /// contribute.
-fn collect_style_text(root: &NodeRef<HtmlNodeType>) -> Vec<String> {
+fn collect_style_text(root: &NodeRef<HtmlNodeType>) -> Vec<StyleSheet> {
     let mut sheets = Vec::new();
     let mut stack = vec![Rc::clone(root)];
     while let Some(node) = stack.pop() {
@@ -264,6 +276,7 @@ fn collect_style_text(root: &NodeRef<HtmlNodeType>) -> Vec<String> {
                 .is_some_and(|tag| tag.eq_ignore_ascii_case("style"))
         };
         if is_style {
+            let shadow_root = crate::engine::html::parser::shadow_root_owner_id(&node);
             let node = node.borrow();
             let css = node
                 .children()
@@ -274,7 +287,10 @@ fn collect_style_text(root: &NodeRef<HtmlNodeType>) -> Vec<String> {
                 })
                 .collect::<String>();
             if !css.trim().is_empty() {
-                sheets.push(css);
+                sheets.push(StyleSheet {
+                    text: css,
+                    shadow_root,
+                });
             }
             continue;
         }

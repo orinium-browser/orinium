@@ -710,14 +710,16 @@ fn shadow_root_construct_error(_vm: &mut VM, _args: Vec<JSValue>) -> JSResult<JS
 }
 
 /// `instanceof ShadowRoot` hook: matches exposed shadow-root wrappers, which
-/// carry the `mode` property and `#shadow-root` node name.
+/// are document fragments carrying a `mode`. A plain `DocumentFragment` has
+/// the same node type but no `mode`.
 fn shadow_root_has_instance(_vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSValue> {
     let matches = args
         .get(1)
         .and_then(JSValue::as_object)
         .map(|object| {
             let borrowed = object.borrow();
-            borrowed.get("nodeName").as_string() == Some("#shadow-root")
+            borrowed.get("nodeType").as_number() == Some(11.0)
+                && borrowed.get("mode").as_string().is_some()
         })
         .unwrap_or(false);
     Ok(JSValue::from_bool(matches))
@@ -1971,7 +1973,7 @@ pub(crate) fn expose_shadow_root(
     dom_id: u64,
 ) -> Option<Rc<RefCell<JSObject>>> {
     let mode_str = match &node.borrow().value {
-        HtmlNodeType::ShadowRoot { mode } => match mode {
+        HtmlNodeType::ShadowRoot { mode, .. } => match mode {
             crate::engine::html::ShadowRootMode::Open => "open",
             crate::engine::html::ShadowRootMode::Closed => "closed",
         },
@@ -2002,11 +2004,17 @@ pub(crate) fn expose_shadow_root(
         );
         obj.define_property(
             "nodeName".to_string(),
-            Property::read_only(JSValue::from_string("#shadow-root".to_string())),
+            Property::read_only(JSValue::from_string("#document-fragment".to_string())),
         );
         obj.define_property(
             "mode".to_string(),
             Property::read_only(JSValue::from_string(mode_str.to_string())),
+        );
+        // `host` is the element the shadow root is attached to, i.e. its
+        // parent in the DOM tree. It is exposed for closed roots too.
+        obj.define_property(
+            "host".to_string(),
+            read_only_accessor_property(super::element::get_parent_element),
         );
         obj.define_property(
             "textContent".to_string(),

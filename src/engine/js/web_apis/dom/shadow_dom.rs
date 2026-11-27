@@ -10,6 +10,11 @@ use crate::engine::tree::{NodeRef, TreeNode};
 use pixi_byte::vm::VM;
 use pixi_byte::{JSError, JSResult, JSValue};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Process-wide identity for shadow trees. CSS scoping compares it, so every
+/// attached shadow root needs its own value.
+static NEXT_SHADOW_ROOT_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Returns `true` if the given node is a shadow root.
 #[allow(dead_code)]
@@ -92,7 +97,10 @@ pub(crate) fn element_attach_shadow(vm: &mut VM, args: Vec<JSValue>) -> JSResult
         .ok_or_else(|| JSError::TypeError("attachShadow: host element not found".to_string()))?;
 
     // Create the shadow root DOM node.
-    let shadow_node = TreeNode::new(HtmlNodeType::ShadowRoot { mode });
+    let shadow_node = TreeNode::new(HtmlNodeType::ShadowRoot {
+        mode,
+        id: NEXT_SHADOW_ROOT_ID.fetch_add(1, Ordering::Relaxed),
+    });
 
     // Attach shadow root as a child of the host element.
     TreeNode::add_child(&host_node, Rc::clone(&shadow_node));
@@ -142,7 +150,8 @@ pub(crate) fn get_shadow_root(vm: &mut VM, args: Vec<JSValue>) -> JSResult<JSVal
         if matches!(
             sr.borrow().value,
             HtmlNodeType::ShadowRoot {
-                mode: ShadowRootMode::Closed
+                mode: ShadowRootMode::Closed,
+                ..
             }
         ) {
             return Ok(JSValue::null());
