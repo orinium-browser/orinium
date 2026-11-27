@@ -1,6 +1,8 @@
 //! CSSセレクターマッチング処理。DOM要素とセレクターの照合を行う。
 
-use std::collections::HashSet;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 use std::sync::{Arc, OnceLock};
 
 use crate::engine::css::parser::AttributeSelectorOperator;
@@ -52,10 +54,12 @@ pub struct ElementInfo {
     pub hovered: bool,
     /// Whether this element or an ancestor is the active (pressed) target.
     pub active: bool,
-    /// The shadow root ID this element belongs to, if any. Elements inside a
-    /// shadow tree carry the ID of their enclosing shadow root, enabling CSS
-    /// encapsulation (shadow boundary).
+    /// Identity of the shadow tree this element lives in, if any. Stylesheets
+    /// are scoped by comparing it with the tree that declared them.
     pub shadow_root_id: Option<u64>,
+    /// The shadow tree whose slot projects this element, when it is light-DOM
+    /// content assigned to a slot (`::slotted()` can reach it).
+    pub slotted_root: Option<u64>,
 }
 
 /// One link of an [`ElementChain`].
@@ -185,6 +189,80 @@ impl ElementChain {
         }
         chain
     }
+}
+
+thread_local! {
+    /// Parsed arguments of `::slotted(...)` selectors, so the inner selector is
+    /// parsed once per spelling instead of once per matched element.
+    static SLOTTED_SELECTORS: RefCell<HashMap<String, Rc<Vec<ComplexSelector>>>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Splits a functional pseudo-element such as `slotted(.a)` into its argument,
+/// comparing the function name case-insensitively without allocating.
+fn pseudo_argument<'a>(pseudo: &'a str, name: &str) -> Option<&'a str> {
+    let body = pseudo.strip_suffix(')')?;
+    let prefix = body.get(..name.len() + 1)?;
+    if !prefix[..name.len()].eq_ignore_ascii_case(name) || !prefix.ends_with('(') {
+        return None;
+    }
+    Some(&body[name.len() + 1..])
+}
+
+/// Builds an element chain (innermost-first) from a chain link.
+fn chain_from_link(link: &ChainLink) -> ElementChain {
+    let mut elements = Vec::new();
+    let mut current = Some(link);
+    while let Some(link) = current {
+        elements.push(link.info.clone());
+        current = link.next.as_deref();
+    }
+    ElementChain::from_vec(elements)
+}
+
+/// Returns the shadow host of `link` if that element exports `part_name` via
+/// its `part` attribute. The host is the nearest ancestor outside the element's
+/// shadow tree.
+fn exported_part_host<'a>(link: &'a ChainLink, part_name: &str) -> Option<&'a ChainLink> {
+    let exports = link.info.attributes.iter().any(|(name, value)| {
+        name.eq_ignore_ascii_case("part")
+            && value
+                .split_ascii_whitespace()
+                .any(|token| token == part_name)
+    });
+    if !exports {
+        return None;
+    }
+    let shadow_root_id = link.info.shadow_root_id;
+    let mut current = link.next.as_deref();
+    while let Some(ancestor) = current {
+        if ancestor.info.shadow_root_id == shadow_root_id {
+            current = ancestor.next.as_deref();
+            continue;
+        }
+        return Some(ancestor);
+    }
+    None
+}
+
+/// Matches the selector argument of `::slotted(sel)` against a projected
+/// element. An unparsable argument never matches, so a malformed rule cannot
+/// style unrelated content.
+fn slotted_inner_matches(inner: &str, cursor: MatchCursor<'_>) -> bool {
+    let selectors = SLOTTED_SELECTORS.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some(selectors) = cache.get(inner) {
+            return Rc::clone(selectors);
+        }
+        let parsed = Rc::new(crate::engine::html::parser::parse_query_selectors(inner));
+        cache.insert(inner.to_string(), Rc::clone(&parsed));
+        parsed
+    });
+    if selectors.is_empty() {
+        return false;
+    }
+    let chain = chain_from_link(cursor.link);
+    selectors.iter().any(|selector| selector.matches(&chain))
 }
 
 #[derive(Clone, Copy)]
@@ -418,52 +496,54 @@ impl Selector {
         })
     }
 
-    fn matches_at(&self, cursor: MatchCursor<'_>) -> bool {
+    fn matches_at(&self, cursor: MatchCursor<'_>, apply_pseudo: bool) -> bool {
         let element = ComplexSelector::element_at(cursor);
         let is_root = cursor.sibling_link.is_none() && cursor.link.next.is_none();
         if !self.matches_base(element) || !self.matches_pseudo_classes(cursor, is_root) {
             return false;
         }
-        if let Some(pseudo) = &self.pseudo_element {
-            let pseudo_lower = pseudo.to_ascii_lowercase();
-            // ::before / ::after always match their originating element.
-            if pseudo_lower == "before" || pseudo_lower == "after" {
-                return true;
-            }
-            // ::part(name) matches elements whose `part` attribute contains the
-            // given part name (space-separated tokens).
-            if let Some(rest) = pseudo_lower.strip_prefix("part(") {
-                let part_name = rest.strip_suffix(')').unwrap_or(rest);
-                if !part_name.is_empty() {
-                    return element.attributes.iter().any(|(name, value)| {
-                        name.eq_ignore_ascii_case("part")
-                            && value
-                                .split_ascii_whitespace()
-                                .any(|token| token == part_name)
-                    });
-                }
-            }
-            // ::slotted(...) matches elements assigned to a slot. Basic support:
-            // treat as matching any element (slot assignment resolution is
-            // handled at a higher layer).
-            if pseudo_lower.starts_with("slotted(") {
-                return true;
-            }
-            // ::shadow matches elements in a shadow tree. Basic support:
-            // treat as matching any element.
-            if pseudo_lower == "shadow" {
-                return true;
-            }
-            // Other pseudo-elements are not yet supported.
-            return false;
-        } else {
-            true
+        if !apply_pseudo {
+            return true;
         }
+        let Some(pseudo) = &self.pseudo_element else {
+            return true;
+        };
+        // ::before / ::after always match their originating element.
+        if pseudo.eq_ignore_ascii_case("before") || pseudo.eq_ignore_ascii_case("after") {
+            return true;
+        }
+        // ::slotted(sel) only matches a light-DOM element that is actually
+        // assigned to a slot of a shadow host and itself matches `sel`.
+        // Elements that are not projected never match, so a rule such as
+        // `::slotted(.badge)` cannot style an unassigned child.
+        if let Some(inner) = pseudo_argument(pseudo, "slotted") {
+            if element.slotted_root.is_none() {
+                return false;
+            }
+            let inner = inner.trim();
+            if inner.is_empty() || inner == "*" {
+                return true;
+            }
+            return slotted_inner_matches(inner, cursor);
+        }
+        // `::part()` was resolved against the host chain before this compound
+        // was reached, and `::shadow` cannot bridge the stylesheet scope.
+        // Every other pseudo-element is not yet supported.
+        false
     }
 }
 
 impl ComplexSelector {
     pub fn matches(&self, chain: &ElementChain) -> bool {
+        self.matches_in_scope(chain, None)
+    }
+
+    /// Matches this selector for a declaration owned by `origin`: `None` for the
+    /// document's stylesheets, `Some(shadow tree id)` for a `<style>` inside
+    /// that shadow root. A stylesheet only styles its own tree; `::slotted()`
+    /// is the one bridge from a shadow root to the light content it projects,
+    /// and `::part()` reaches exported parts from outside.
+    pub fn matches_in_scope(&self, chain: &ElementChain, origin: Option<u64>) -> bool {
         if self.parts.is_empty() {
             return false;
         }
@@ -471,10 +551,20 @@ impl ComplexSelector {
             return false;
         };
 
-        // Shadow DOM encapsulation: elements inside a shadow tree only match
-        // selectors that use `::part` or `::slotted` (designed to cross the
-        // shadow boundary). All other selectors are blocked at the boundary.
-        if link.info.shadow_root_id.is_some() && !self.crosses_shadow_boundary() {
+        // `::part(name)` is resolved against the part the shadow host exports,
+        // so the subject compound has to match the *host*, not the part element.
+        if let Some(part_name) = self.subject_part_name() {
+            return self.matches_shadow_part(link, part_name);
+        }
+
+        let in_scope = if self.subject_is_slotted() {
+            // `::slotted()` only exists inside a shadow tree's stylesheet, and
+            // then only reaches the light-DOM content that tree projects.
+            origin.is_some() && link.info.slotted_root == origin
+        } else {
+            link.info.shadow_root_id == origin
+        };
+        if !in_scope {
             return false;
         }
 
@@ -487,16 +577,40 @@ impl ComplexSelector {
         )
     }
 
-    /// Returns `true` if the selector uses `::part` or `::slotted` pseudo-elements,
-    /// which are explicitly designed to cross the Shadow DOM boundary.
-    fn crosses_shadow_boundary(&self) -> bool {
-        self.parts.iter().any(|part| {
-            let pseudo = part.selector.pseudo_element.as_deref().unwrap_or("");
-            pseudo == "part"
-                || pseudo.starts_with("part(")
-                || pseudo.starts_with("slotted(")
-                || pseudo == "shadow"
-        })
+    /// The pseudo-element on the subject compound (`parts[0]`), if any.
+    fn subject_pseudo_element(&self) -> Option<&str> {
+        self.parts.first()?.selector.pseudo_element.as_deref()
+    }
+
+    /// Whether the subject compound is a `::slotted()` selector.
+    fn subject_is_slotted(&self) -> bool {
+        self.subject_pseudo_element()
+            .is_some_and(|pseudo| pseudo_argument(pseudo, "slotted").is_some())
+    }
+
+    /// If the subject compound carries `::part(name)`, returns the part name.
+    pub(crate) fn subject_part_name(&self) -> Option<&str> {
+        let name = pseudo_argument(self.subject_pseudo_element()?, "part")?.trim();
+        (!name.is_empty()).then_some(name)
+    }
+
+    /// Matches a `host::part(name)` selector: the tested element must export
+    /// `name`, and the rest of the selector must match the element's shadow
+    /// host (the first ancestor outside the element's shadow tree).
+    fn matches_shadow_part(&self, link: &ChainLink, part_name: &str) -> bool {
+        let Some(host) = exported_part_host(link, part_name) else {
+            return false;
+        };
+        // The host satisfies the compound that carried `::part()`, so the
+        // pseudo-element check is skipped for that compound only.
+        self.matches_from_inner(
+            MatchCursor {
+                link: host,
+                sibling_link: None,
+            },
+            0,
+            false,
+        )
     }
 
     fn element_at(cursor: MatchCursor<'_>) -> &ElementInfo {
@@ -518,9 +632,20 @@ impl ComplexSelector {
     }
 
     fn matches_from(&self, cursor: MatchCursor<'_>, selector_index: usize) -> bool {
+        self.matches_from_inner(cursor, selector_index, true)
+    }
+
+    /// Walks the selector right-to-left. `apply_pseudo` is `false` only for the
+    /// compound whose `::part()` has already been resolved against the host.
+    fn matches_from_inner(
+        &self,
+        cursor: MatchCursor<'_>,
+        selector_index: usize,
+        apply_pseudo: bool,
+    ) -> bool {
         let part = &self.parts[selector_index];
 
-        if !part.selector.matches_at(cursor) {
+        if !part.selector.matches_at(cursor, apply_pseudo) {
             return false;
         }
 
@@ -735,6 +860,86 @@ mod tests {
             crate::engine::css::parser::CssNodeType::Rule { selectors } => selectors[0].clone(),
             _ => panic!("expected CSS rule"),
         }
+    }
+
+    fn part_element(part: &str, shadow_root_id: u64) -> ElementInfo {
+        ElementInfo {
+            tag_name: "div".into(),
+            attributes: vec![(Arc::from("part"), Arc::from(part))].into(),
+            shadow_root_id: Some(shadow_root_id),
+            ..ElementInfo::default()
+        }
+    }
+
+    fn host(tag: &str) -> ElementInfo {
+        ElementInfo {
+            tag_name: tag.into(),
+            ..ElementInfo::default()
+        }
+    }
+
+    #[test]
+    fn part_selector_matches_exported_part_through_its_host() {
+        let selector = parse_selector("style-host::part(panel)");
+
+        assert!(selector.matches(&chain([
+            part_element("panel", 7),
+            host("style-host")
+        ])));
+        // The part token must be exported by the element itself.
+        assert!(!selector.matches(&chain([
+            part_element("other", 7),
+            host("style-host")
+        ])));
+        // A selector for a different host must not reach the part.
+        assert!(!parse_selector("other-host::part(panel)")
+            .matches(&chain([part_element("panel", 7), host("style-host")])));
+    }
+
+    #[test]
+    fn slotted_selector_only_matches_projected_elements() {
+        let selector = parse_selector("::slotted(.slotted-target)");
+
+        let projected = ElementInfo {
+            tag_name: "span".into(),
+            classes: vec![Arc::from("slotted-target")].into(),
+            slotted_root: Some(1),
+            ..ElementInfo::default()
+        };
+        let unprojected = ElementInfo {
+            slotted_root: None,
+            ..projected.clone()
+        };
+        let wrong_class = ElementInfo {
+            classes: vec![Arc::from("other")].into(),
+            ..projected.clone()
+        };
+
+        // Only the shadow tree that projects the element may style it.
+        assert!(selector.matches_in_scope(&chain([projected.clone()]), Some(1)));
+        assert!(!selector.matches_in_scope(&chain([projected.clone()]), Some(2)));
+        assert!(!selector.matches_in_scope(&chain([projected.clone()]), None));
+        assert!(!selector.matches_in_scope(&chain([unprojected]), Some(1)));
+        assert!(!selector.matches_in_scope(&chain([wrong_class]), Some(1)));
+    }
+
+    #[test]
+    fn stylesheet_scope_confines_rules_to_their_shadow_tree() {
+        let selector = parse_selector(".internal-only");
+
+        let mut inner = element("span", &["internal-only"], 1, 1, 1, 1);
+        inner.shadow_root_id = Some(9);
+        // Document stylesheets cannot reach into a shadow tree…
+        assert!(!selector.matches_in_scope(&chain([inner.clone()]), None));
+        // …its own stylesheet can…
+        assert!(selector.matches_in_scope(&chain([inner.clone()]), Some(9)));
+        // …and a sibling tree's stylesheet cannot.
+        assert!(!selector.matches_in_scope(&chain([inner]), Some(10)));
+
+        // A shadow tree's stylesheet must not style document content either.
+        let light = element("span", &["internal-only"], 1, 1, 1, 1);
+        assert!(selector.matches_in_scope(&chain([light.clone()]), None));
+        assert!(!selector.matches_in_scope(&chain([light]), Some(9)));
     }
 
     #[test]
@@ -1092,15 +1297,21 @@ mod tests {
 
     #[test]
     fn shadow_dom_css_encapsulation_allows_part_and_slotted() {
-        // ::part and ::slotted selectors CAN cross the shadow boundary.
+        // ::part(...) CAN cross the shadow boundary: it names a part the host
+        // exports, and the rest of the selector must match that host.
         let mut el_in_shadow = element("div", &[], 1, 1, 1, 1);
         el_in_shadow.shadow_root_id = Some(42);
         el_in_shadow.attributes = vec![("part".into(), "foo".into())].into();
 
-        // ::part(foo) matches because the element has part="foo"
-        // and ::part is not blocked by the shadow boundary.
-        let selector = parse_selector("::part(foo)");
-        assert!(selector.matches(&chain([el_in_shadow])));
+        let selector = parse_selector("style-host::part(foo)");
+        assert!(selector.matches(&chain([
+            el_in_shadow.clone(),
+            host("style-host")
+        ])));
+        assert!(!selector.matches(&chain([el_in_shadow.clone(), host("other-host")])));
+
+        // Without a shadow host above it, the part is not exported to anyone.
+        assert!(!parse_selector("::part(foo)").matches(&chain([el_in_shadow])));
     }
 
     #[test]

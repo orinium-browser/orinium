@@ -111,17 +111,30 @@ impl std::fmt::Display for CssValue {
             CssValue::String(value) => write!(f, "\"{value}\""),
             CssValue::Color(value) => write!(f, "#{value}"),
             CssValue::Function(name, arguments) => {
-                let arguments = arguments
-                    .iter()
-                    .map(|argument| {
-                        argument
-                            .iter()
-                            .map(CssValue::to_string)
-                            .collect::<Vec<_>>()
-                            .join(" ")
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
+                // Colour functions serialize with commas regardless of the
+                // source syntax: `rgb(1 2 3)` and `rgb(1, 2, 3)` both read back
+                // as `rgb(1, 2, 3)`, matching CSSOM computed values.
+                let is_color_function = matches!(name.as_str(), "rgb" | "rgba" | "hsl" | "hsla");
+                let arguments = if is_color_function {
+                    arguments
+                        .iter()
+                        .flat_map(|argument| argument.iter())
+                        .map(CssValue::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                } else {
+                    arguments
+                        .iter()
+                        .map(|argument| {
+                            argument
+                                .iter()
+                                .map(CssValue::to_string)
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
                 write!(f, "{name}({arguments})")
             }
             CssValue::List(values) => {

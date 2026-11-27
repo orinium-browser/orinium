@@ -358,7 +358,7 @@ impl ComplexSelector {
 }
 
 /// Parse the integer `An+B` grammar used by structural pseudo-classes.
-fn parse_an_plus_b(tokens: &[Token<'_>]) -> Option<(i32, i32)> {
+fn parse_an_plus_b(tokens: &[Token]) -> Option<(i32, i32)> {
     let mut expression = String::new();
     for token in tokens {
         match token {
@@ -403,9 +403,9 @@ fn parse_an_plus_b(tokens: &[Token<'_>]) -> Option<(i32, i32)> {
 
 /// CSS parser consuming tokens and producing syntax structures.
 #[derive(Clone)]
-pub struct Parser<'a> {
+pub struct Parser {
     /// Source of tokens produced by the tokenizer
-    tokenizer: Tokenizer<'a>,
+    tokenizer: Tokenizer,
 
     /// Used to detect the start and end of rule blocks (`{}`).
     brace_depth: usize,
@@ -413,7 +413,7 @@ pub struct Parser<'a> {
     /// Lookahead token (optional)
     ///
     /// Parser may need to peek the next token without consuming it.
-    lookahead: VecDeque<Token<'a>>,
+    lookahead: VecDeque<Token>,
 }
 
 /// Parser error kinds
@@ -475,9 +475,9 @@ impl std::error::Error for ParserError {}
 /// Result type for parser functions
 pub type ParseResult<T> = Result<T, ParserError>;
 
-impl<'a> Parser<'a> {
+impl Parser {
     /// Create a new CSS parser from a source string.
-    pub fn new(input: &'a str) -> Self {
+    pub fn new(input: &str) -> Self {
         Self {
             tokenizer: Tokenizer::new(input),
             brace_depth: 0,
@@ -492,13 +492,13 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn peek_next_token(&mut self, cursor_size: usize) -> &Token<'a> {
+    fn peek_next_token(&mut self, cursor_size: usize) -> &Token {
         self.ensure_lookahead(cursor_size);
         &self.lookahead[cursor_size]
     }
 
     /// Peek at the next token without consuming it.
-    fn peek_token(&mut self) -> &Token<'a> {
+    fn peek_token(&mut self) -> &Token {
         self.peek_next_token(0)
     }
 
@@ -511,7 +511,7 @@ impl<'a> Parser<'a> {
         self.parse_declaration_and_nested_rule_list()
     }
 
-    fn consume_token(&mut self) -> Token<'a> {
+    fn consume_token(&mut self) -> Token {
         if let Some(tok) = self.lookahead.pop_front() {
             tok
         } else {
@@ -651,7 +651,7 @@ impl<'a> Parser<'a> {
     fn parse_at_rule(&mut self) -> ParseResult<CssNode> {
         // 1. consume '@' token
         let at_name = if let Token::AtKeyword(name) = self.consume_token() {
-            name.into_owned()
+            name.clone()
         } else {
             return Err(ParserError {
                 kind: ParserErrorKind::UnexpectedToken {
@@ -846,7 +846,7 @@ impl<'a> Parser<'a> {
                             }
                             Token::Ident(name) => {
                                 selectors.push(KeyframeSelector(CssValue::Keyword(
-                                    name.clone().into_owned().into(),
+                                    name.clone().clone().into(),
                                 )));
                                 self.consume_token();
                             }
@@ -858,12 +858,12 @@ impl<'a> Parser<'a> {
                                     .push(KeyframeSelector(CssValue::Length(n, Unit::Percent)));
                             }
                             Token::Dimension(n, unit) => {
-                                let value = if unit.as_ref() == "%" {
+                                let value = if unit == "%" {
                                     CssValue::Length(*n, Unit::Percent)
                                 } else {
                                     CssValue::Length(
                                         *n,
-                                        match unit.as_ref() {
+                                        match unit.as_str() {
                                             "px" => Unit::Px,
                                             _ => Unit::Unknown,
                                         },
@@ -941,13 +941,13 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_at_query(tokens: Vec<Token<'_>>) -> ParseResult<AtQuery> {
+    fn parse_at_query(tokens: Vec<Token>) -> ParseResult<AtQuery> {
         let mut cursor = 0;
         let items = Self::parse_at_query_list(&tokens, &mut cursor)?;
         Ok(AtQuery::Group(items))
     }
 
-    fn parse_at_query_list(tokens: &[Token<'_>], cursor: &mut usize) -> ParseResult<Vec<AtQuery>> {
+    fn parse_at_query_list(tokens: &[Token], cursor: &mut usize) -> ParseResult<Vec<AtQuery>> {
         let mut items = Vec::new();
 
         while *cursor < tokens.len() {
@@ -985,7 +985,7 @@ impl<'a> Parser<'a> {
         Ok(items)
     }
 
-    fn parse_at_query_item(tokens: &[Token<'_>], cursor: &mut usize) -> ParseResult<AtQuery> {
+    fn parse_at_query_item(tokens: &[Token], cursor: &mut usize) -> ParseResult<AtQuery> {
         let start = *cursor;
 
         // Try a range beginning with a media feature.
@@ -996,7 +996,7 @@ impl<'a> Parser<'a> {
         *cursor = start;
 
         let name = match &tokens[*cursor] {
-            Token::Ident(s) => s.clone().into_owned(),
+            Token::Ident(s) => s.clone().clone(),
             _ => {
                 return Err(ParserError {
                     kind: ParserErrorKind::UnexpectedToken {
@@ -1026,7 +1026,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_at_query_range(
-        tokens: &[Token<'_>],
+        tokens: &[Token],
         cursor: &mut usize,
     ) -> ParseResult<Option<AtQuery>> {
         let start = *cursor;
@@ -1042,7 +1042,7 @@ impl<'a> Parser<'a> {
                 if let Some(value) = Self::try_parse_at_query_value(tokens, cursor)? {
                     return Ok(Some(AtQuery::Range {
                         left: None,
-                        name: name.into_owned(),
+                        name: name.clone(),
                         right: Some((operator, value)),
                     }));
                 }
@@ -1066,7 +1066,7 @@ impl<'a> Parser<'a> {
         Self::skip_at_query_whitespace(tokens, cursor);
 
         let name = match tokens.get(*cursor) {
-            Some(Token::Ident(name)) => name.clone().into_owned(),
+            Some(Token::Ident(name)) => name.clone().clone(),
             _ => {
                 *cursor = start;
                 return Ok(None);
@@ -1097,7 +1097,7 @@ impl<'a> Parser<'a> {
         }))
     }
 
-    fn parse_range_operator(tokens: &[Token<'_>], cursor: &mut usize) -> Option<RangeOperator> {
+    fn parse_range_operator(tokens: &[Token], cursor: &mut usize) -> Option<RangeOperator> {
         match tokens.get(*cursor) {
             Some(Token::Delim('<')) => {
                 if matches!(tokens.get(*cursor + 1), Some(Token::Delim('='))) {
@@ -1128,7 +1128,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn skip_at_query_whitespace(tokens: &[Token<'_>], cursor: &mut usize) {
+    fn skip_at_query_whitespace(tokens: &[Token], cursor: &mut usize) {
         while matches!(
             tokens.get(*cursor),
             Some(Token::Whitespace | Token::Comment(_))
@@ -1138,7 +1138,7 @@ impl<'a> Parser<'a> {
     }
 
     fn try_parse_at_query_value(
-        tokens: &[Token<'_>],
+        tokens: &[Token],
         cursor: &mut usize,
     ) -> ParseResult<Option<CssValue>> {
         let start = *cursor;
@@ -1158,7 +1158,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_at_query_value(tokens: &[Token<'_>], cursor: &mut usize) -> ParseResult<CssValue> {
+    fn parse_at_query_value(tokens: &[Token], cursor: &mut usize) -> ParseResult<CssValue> {
         let mut buf = Vec::new();
         let mut paren_depth = 0;
 
@@ -1275,7 +1275,7 @@ impl<'a> Parser<'a> {
                     });
 
                     if sel.tag.is_none() {
-                        sel.tag = Some(name.into_owned());
+                        sel.tag = Some(name.clone());
                     }
 
                     self.consume_token();
@@ -1291,7 +1291,7 @@ impl<'a> Parser<'a> {
                         pseudo_classes: vec![],
                         pseudo_element: None,
                     });
-                    sel.id = Some(id.into_owned());
+                    sel.id = Some(id.clone());
                     self.consume_token();
                 }
 
@@ -1307,7 +1307,7 @@ impl<'a> Parser<'a> {
                             pseudo_classes: vec![],
                             pseudo_element: None,
                         });
-                        sel.classes.push(class.into_owned());
+                        sel.classes.push(class.clone());
                     }
                 }
 
@@ -1319,8 +1319,8 @@ impl<'a> Parser<'a> {
                         let name_token = self.consume_token();
                         let is_function = matches!(name_token, Token::Function(_));
                         let name = match name_token {
-                            Token::Ident(n) => n.into_owned(),
-                            Token::Function(n) => n.into_owned(),
+                            Token::Ident(n) => n.clone(),
+                            Token::Function(n) => n.clone(),
                             _ => {
                                 // Not a valid pseudo-element name; skip.
                                 continue;
@@ -1462,10 +1462,10 @@ impl<'a> Parser<'a> {
                                     pseudo_classes: vec![],
                                     pseudo_element: None,
                                 });
-                                sel.pseudo_element = Some(name.into_owned());
+                                sel.pseudo_element = Some(name.clone());
                                 continue;
                             }
-                            Token::Ident(name) => Some(PseudoClass::Simple(name.into_owned())),
+                            Token::Ident(name) => Some(PseudoClass::Simple(name.clone())),
                             Token::Function(name) => {
                                 if self.peek_token() == &Token::Delim('(') {
                                     self.consume_token();
@@ -1538,7 +1538,7 @@ impl<'a> Parser<'a> {
                     }
 
                     let name = match self.consume_token() {
-                        Token::Ident(name) => name.into_owned(),
+                        Token::Ident(name) => name.clone(),
                         _ => continue,
                     };
 
@@ -1586,7 +1586,7 @@ impl<'a> Parser<'a> {
                         }
 
                         match self.consume_token() {
-                            Token::Ident(value) | Token::String(value) => Some(value.into_owned()),
+                            Token::Ident(value) | Token::String(value) => Some(value.clone()),
                             _ => continue,
                         }
                     };
@@ -1743,7 +1743,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Consume tokens through the matching `)` of a functional pseudo-class.
-    fn consume_until_closing_parenthesis(&mut self) -> Vec<Token<'a>> {
+    fn consume_until_closing_parenthesis(&mut self) -> Vec<Token> {
         let mut tokens = Vec::new();
         let mut depth = 0;
         loop {
@@ -1872,10 +1872,10 @@ impl<'a> Parser<'a> {
     /// both boundaries preserves the syntactic structure so that, for example,
     /// `minmax(100px, 1fr)` yields two arguments while `circle(50% at 50%)`
     /// yields a single argument with several components.
-    fn parse_function_arguments(tokens: Vec<Token<'_>>) -> ParseResult<Vec<Vec<CssValue>>> {
+    fn parse_function_arguments(tokens: Vec<Token>) -> ParseResult<Vec<Vec<CssValue>>> {
         // Split into comma-separated argument groups, respecting nesting.
-        let mut arguments: Vec<Vec<Token<'_>>> = Vec::new();
-        let mut current: Vec<Token<'_>> = Vec::new();
+        let mut arguments: Vec<Vec<Token>> = Vec::new();
+        let mut current: Vec<Token> = Vec::new();
         let mut depth = 0usize;
 
         for token in tokens {
@@ -1902,7 +1902,7 @@ impl<'a> Parser<'a> {
         let mut result = Vec::new();
         for argument in arguments {
             let mut components = Vec::new();
-            let mut component_tokens: Vec<Token<'_>> = Vec::new();
+            let mut component_tokens: Vec<Token> = Vec::new();
             let mut component_depth = 0usize;
 
             for token in argument {
@@ -1941,7 +1941,7 @@ impl<'a> Parser<'a> {
     /// produce, so it can be evaluated against a [`MediaEnvironment`].
     pub fn parse_media_query(query: &str) -> Option<AtQuery> {
         let mut tokenizer = crate::engine::css::tokenizer::Tokenizer::new(query);
-        let tokens: Vec<Token<'_>> = std::iter::from_fn(|| {
+        let tokens: Vec<Token> = std::iter::from_fn(|| {
             let token = tokenizer.next_token();
             (token != Token::EOF).then_some(token)
         })
@@ -1949,7 +1949,7 @@ impl<'a> Parser<'a> {
         Self::parse_at_query(tokens).ok()
     }
 
-    pub fn parse_tokens_to_css_value(tokens: Vec<Token<'_>>) -> ParseResult<CssValue> {
+    pub fn parse_tokens_to_css_value(tokens: Vec<Token>) -> ParseResult<CssValue> {
         let mut values = vec![];
         let mut iter = tokens.into_iter().peekable();
 
@@ -1957,7 +1957,7 @@ impl<'a> Parser<'a> {
             log::debug!(target: "CssParser", "parse_tokens_to_css_value: token={:?}", token);
 
             match token {
-                Token::Ident(s) => values.push(CssValue::Keyword(s.into_owned().into())),
+                Token::Ident(s) => values.push(CssValue::Keyword(s.clone().into())),
 
                 Token::Delim(',') => {
                     // Preserve comma as a Separator so consumers can split
@@ -2011,15 +2011,15 @@ impl<'a> Parser<'a> {
 
                 Token::Number(n) => values.push(CssValue::Number(n)),
 
-                Token::String(s) => values.push(CssValue::String(s.into_owned())),
+                Token::String(s) => values.push(CssValue::String(s.clone())),
 
                 Token::Url(raw) => values.push(CssValue::Function(
                     "url".to_string(),
-                    vec![vec![CssValue::String(raw.into_owned())]],
+                    vec![vec![CssValue::String(raw.clone())]],
                 )),
 
                 Token::Dimension(value, unit) => {
-                    let unit = match unit.as_ref() {
+                    let unit = match unit.as_str() {
                         "px" => Unit::Px,
                         "cm" => Unit::Cm,
                         "mm" => Unit::Mm,
@@ -2045,7 +2045,7 @@ impl<'a> Parser<'a> {
                     values.push(CssValue::Length(value, unit));
                 }
 
-                Token::Hash(s) => values.push(CssValue::Color(s.into_owned())),
+                Token::Hash(s) => values.push(CssValue::Color(s.clone())),
 
                 Token::Function(name) => {
                     // () の中を、外側の括弧を除いて集める
@@ -2074,7 +2074,7 @@ impl<'a> Parser<'a> {
                     let args = Self::parse_function_arguments(func_tokens)
                         .map_err(|e| e.with_context("parse function args"))?;
 
-                    values.push(CssValue::Function(name.into_owned(), args));
+                    values.push(CssValue::Function(name.clone(), args));
                 }
 
                 _ => continue,
