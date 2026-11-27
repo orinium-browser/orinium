@@ -357,7 +357,7 @@ fn bench_selector_match_cache(c: &mut Criterion) {
         let mut cache = SelectorMatchCache::new();
         for (s_idx, selector) in selectors.iter().enumerate() {
             for node in 0..node_count {
-                cache.get_or_insert(selector, node, || (s_idx as u32 + node).is_multiple_of(2));
+                cache.get_or_insert(selector, node, None, || (s_idx as u32 + node).is_multiple_of(2));
             }
         }
 
@@ -367,7 +367,7 @@ fn bench_selector_match_cache(c: &mut Criterion) {
             let node = (i / selectors.len()) as u32 % node_count;
             i += 1;
             black_box(
-                cache.get_or_insert(black_box(selector), black_box(node), || {
+                cache.get_or_insert(black_box(selector), black_box(node), None, || {
                     unreachable!("a warm cache must not recompute the match")
                 }),
             )
@@ -381,7 +381,7 @@ fn bench_selector_match_cache(c: &mut Criterion) {
             i += 1;
             let selector = &selectors[i % selectors.len()];
             let node = (i / selectors.len()) as u32;
-            black_box(cache.get_or_insert(selector, node, || true))
+            black_box(cache.get_or_insert(selector, node, None, || true))
         });
     });
 
@@ -389,13 +389,13 @@ fn bench_selector_match_cache(c: &mut Criterion) {
         let mut cache = SelectorMatchCache::with_capacity(4096);
         for (s_idx, selector) in selectors.iter().enumerate() {
             for node in 0..node_count {
-                cache.get_or_insert(selector, node, || (s_idx as u32 + node).is_multiple_of(2));
+                cache.get_or_insert(selector, node, None, || (s_idx as u32 + node).is_multiple_of(2));
             }
         }
         // Fill beyond capacity with different keys to create skips.
         for (s_idx, selector) in selectors.iter().enumerate() {
             for node in node_count..(node_count * 2) {
-                cache.get_or_insert(selector, node, || (s_idx as u32 + node).is_multiple_of(2));
+                cache.get_or_insert(selector, node, None, || (s_idx as u32 + node).is_multiple_of(2));
             }
         }
 
@@ -405,7 +405,7 @@ fn bench_selector_match_cache(c: &mut Criterion) {
             let node = (i / selectors.len()) as u32 % node_count;
             i += 1;
             black_box(
-                cache.get_or_insert(black_box(selector), black_box(node), || {
+                cache.get_or_insert(black_box(selector), black_box(node), None, || {
                     unreachable!("entries admitted on pass 1 must remain cached")
                 }),
             )
@@ -461,13 +461,13 @@ fn bench_selector_match_cache(c: &mut Criterion) {
             }
         }
         for (sel, node) in &keys {
-            cache.get_or_insert(sel, *node, || true);
+            cache.get_or_insert(sel, *node, None, || true);
         }
 
         b.iter(|| {
             let mut hits = 0usize;
             for (sel, node) in &keys {
-                if cache.get_or_insert(black_box(sel), black_box(*node), || unreachable!()) {
+                if cache.get_or_insert(black_box(sel), black_box(*node), None, || unreachable!()) {
                     hits += 1;
                 }
             }
